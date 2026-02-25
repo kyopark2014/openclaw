@@ -148,3 +148,14 @@ Slack Bot을 설정하려면 App Token과 Bot Token이 필요합니다.
 #### 4. OpenClaw 설정
 4. Bot username 입력 (예: openclaw_assistant_bot)
 5. BotFather가 제공하는 Token을 복사
+
+
+## Device 추가
+
+```text
+openclaw devices list
+openclaw devices approve [Device ID]
+```
+
+
+
