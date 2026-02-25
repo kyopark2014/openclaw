@@ -62,3 +62,42 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 • fallbacks로 primary 실패 시 자동 전환
 
 전제조건: EC2에 Bedrock 접근 가능한 IAM role 붙이거나, AWS credentials 설정되어 있어야 함
+
+
+
+## 사용방법
+
+EC2에 SSM으로 접속후 아래와 같이 실행합니다.
+
+```text
+sudo su - ec2-user
+openclaw --version
+openclaw config get gateway
+```
+
+### 기본 명령어
+
+- 버전 확인
+
+```text
+sudo -u ec2-user openclaw --version
+```
+
+- 설정 확인
+
+```text
+sudo -u ec2-user openclaw config get gateway
+```
+
+
+- 채널 상태 확인
+
+```text
+sudo -u ec2-user openclaw channels status
+```
+
+- Health 체크
+
+```text
+sudo -u ec2-user openclaw health --verbose
+```
