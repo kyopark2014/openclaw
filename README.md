@@ -101,3 +101,15 @@ sudo -u ec2-user openclaw channels status
 ```text
 sudo -u ec2-user openclaw health --verbose
 ```
+
+## Remote 설정
+
+WahtsApp의 경우에 ALB에서 http로 연결하면서 secure 설정 문제로 접속이 불가합니다. Telegram은 쉽게 접속이 가능합니다.
+
+## Telegram Bot 생성
+
+1. Telegram에서 [@BotFather](https://t.me/BotFather)와 대화 시작
+2. /newbot 명령 입력
+3. Bot 이름 입력 (예: OpenClaw Assistant)
+4. Bot username 입력 (예: openclaw_assistant_bot)
+5. BotFather가 제공하는 Token을 복사
