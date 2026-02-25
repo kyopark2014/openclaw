@@ -106,10 +106,45 @@ sudo -u ec2-user openclaw health --verbose
 
 WahtsApp의 경우에 ALB에서 http로 연결하면서 secure 설정 문제로 접속이 불가합니다. Telegram은 쉽게 접속이 가능합니다.
 
-## Telegram Bot 생성
+### Telegram Bot 생성
 
 1. Telegram에서 [@BotFather](https://t.me/BotFather)와 대화 시작
 2. /newbot 명령 입력
 3. Bot 이름 입력 (예: OpenClaw Assistant)
+
+### Slack
+
+# Slack 설정 방법
+
+Slack Bot을 설정하려면 App Token과 Bot Token이 필요합니다.
+
+#### 1. Slack App 생성
+
+1. https://api.slack.com/apps 접속
+2. "Create New App" 클릭
+3. "From scratch" 선택
+4. App 이름 및 Workspace 선택
+
+#### 2. Bot Token 발급
+
+1. "OAuth & Permissions" 메뉴
+2. "Bot Token Scopes" 추가:
+   - chat:write
+   - channels:history
+   - groups:history
+   - im:history
+   - mpim:history
+3. "Install to Workspace" 클릭
+4. Bot User OAuth Token 복사 (xoxb-로 시작)
+
+#### 3. App Token 발급
+
+1. "Basic Information" 메뉴
+2. "App-Level Tokens" 섹션
+3. "Generate Token and Scopes" 클릭
+4. Scope 추가: connections:write
+5. App Token 복사 (xapp-로 시작)
+
+#### 4. OpenClaw 설정
 4. Bot username 입력 (예: openclaw_assistant_bot)
 5. BotFather가 제공하는 Token을 복사
