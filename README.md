@@ -61,4 +61,4 @@ curl -fsSL https://openclaw.ai/install.sh | bash
 
 • fallbacks로 primary 실패 시 자동 전환
 
-전제조건: EC2에 Bedrock 접근 가능한 IAM role 붙이거나, AWS credentials 설정되어 있어야 함 (edited)
+전제조건: EC2에 Bedrock 접근 가능한 IAM role 붙이거나, AWS credentials 설정되어 있어야 함
