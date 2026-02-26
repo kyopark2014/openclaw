@@ -150,36 +150,6 @@ Slack Bot을 설정하려면 App Token과 Bot Token이 필요합니다.
 5. BotFather가 제공하는 Token을 복사
 
 
-## Device 추가
-
-SSM으로 접속시 ec2-user로 전환합니다.
-
-```text
-sudo su - ec2-user
-```
-
-openclaw의 device 리스트를 확인합니다.
-
-```text
-openclaw devices list
-```
-
-이때의 결과는 아래와 같습니다.
-
-<img width="900" alt="noname" src="https://github.com/user-attachments/assets/f95424a7-0221-4513-9523-5183b2221288" />
-
-아래와 같이 접속한 디바이스에 권한을 부여합니다.
-
-```text
-openclaw devices approve [Device ID]
-```
-
-이때 request의 device id를 활용합니다.
-
-<img width="600" alt="noname" src="https://github.com/user-attachments/assets/a2c2945c-339a-4064-b721-e46110f1fe45" />
-
-
-
 
 ## Kiro-Cli 설치
 
