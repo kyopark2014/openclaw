@@ -52,8 +52,8 @@ cat > /home/ec2-user/.openclaw/openclaw.json << ENDCONFIG
         "api": "bedrock-converse-stream",
         "models": [
           {
-            "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-            "name": "Claude Sonnet 4",
+            "id": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "name": "Claude Sonnet 4.5",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
@@ -82,7 +82,7 @@ cat > /home/ec2-user/.openclaw/openclaw.json << ENDCONFIG
   "agents": {
     "defaults": {
       "model": {
-        "primary": "amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+        "primary": "amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
       },
       "workspace": "/home/ec2-user/clawd",
       "compaction": {

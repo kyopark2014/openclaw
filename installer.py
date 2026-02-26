@@ -867,7 +867,34 @@ class Installer:
                                 "cost": {"input": 0.003, "output": 0.015},
                                 "contextWindow": 200000,
                                 "maxTokens": 8192,
-                            }
+                            },
+                            {
+                                "id": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+                                "name": "Claude Haiku 4.5",
+                                "reasoning": False,
+                                "input": ["text", "image"],
+                                "cost": {"input": 0.0008, "output": 0.004},
+                                "contextWindow": 200000,
+                                "maxTokens": 8192,
+                            },
+                            {
+                                "id": "global.anthropic.claude-opus-4-6-v1",
+                                "name": "Claude Opus 4.6",
+                                "reasoning": True,
+                                "input": ["text", "image"],
+                                "cost": {"input": 0.015, "output": 0.075},
+                                "contextWindow": 200000,
+                                "maxTokens": 32000,
+                            },
+                            {
+                                "id": "global.anthropic.claude-sonnet-4-6",
+                                "name": "Claude Sonnet 4.6",
+                                "reasoning": True,
+                                "input": ["text", "image"],
+                                "cost": {"input": 0.003, "output": 0.015},
+                                "contextWindow": 200000,
+                                "maxTokens": 16384,
+                            },
                         ],
                     }
                 }
