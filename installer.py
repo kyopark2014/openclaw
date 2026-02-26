@@ -627,44 +627,38 @@ class Installer:
         }
         bedrock_policy = {
             "Version": "2012-10-17",
-            "Statement": [{
-                "Effect": "Allow",
-                "Action": [
-                    "bedrock:InvokeModel",
-                    "bedrock:InvokeModelWithResponseStream",
-                    "bedrock:ListFoundationModels",
-                    "bedrock:GetFoundationModel",
-                    "bedrock:GetInferenceProfile",
-                ],
-                "Resource": "*",
-            }],
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock:InvokeModel",
+                        "bedrock:InvokeModelWithResponseStream",
+                        "bedrock:ListFoundationModels",
+                        "bedrock:GetFoundationModel",
+                        "bedrock:GetInferenceProfile",
+                    ],
+                    "Resource": "*",
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "s3:ListAllMyBuckets",
+                        "s3:ListBucket",
+                        "s3:GetObject",
+                        "s3:PutObject",
+                        "s3:DeleteObject",
+                        "s3:GetBucketLocation",
+                    ],
+                    "Resource": "*",
+                },
+            ],
         }
 
-        try:
-            self.iam.create_role(
-                RoleName=role_name,
-                AssumeRolePolicyDocument=json.dumps(trust),
-                Description="OpenClaw Bedrock EC2 role",
-            )
-            logger.info("  Role 생성: %s", role_name)
-        except ClientError as exc:
-            if exc.response["Error"]["Code"] != "EntityAlreadyExists":
-                raise
-            logger.info("  Role 재사용: %s", role_name)
+        managed_policies = [
+            "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+        ]
 
-        self.iam.update_assume_role_policy(RoleName=role_name, PolicyDocument=json.dumps(trust))
-        self.iam.put_role_policy(
-            RoleName=role_name, PolicyName="BedrockAccess",
-            PolicyDocument=json.dumps(bedrock_policy),
-        )
-        try:
-            self.iam.attach_role_policy(
-                RoleName=role_name,
-                PolicyArn="arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
-            )
-        except ClientError:
-            pass
-
+        # --- Instance Profile 확보 ---
         try:
             self.iam.create_instance_profile(InstanceProfileName=profile_name)
             logger.info("  Profile 생성: %s", profile_name)
@@ -676,18 +670,50 @@ class Installer:
         time.sleep(2)
         profile = self.iam.get_instance_profile(InstanceProfileName=profile_name)["InstanceProfile"]
         profile_arn = profile["Arn"]
-        existing_roles = {r["RoleName"] for r in profile["Roles"]}
-        if role_name not in existing_roles:
-            for old_role in existing_roles:
-                logger.info("  기존 Role 제거: %s (from %s)", old_role, profile_name)
-                self.iam.remove_role_from_instance_profile(
-                    InstanceProfileName=profile_name, RoleName=old_role,
+        existing_roles = [r["RoleName"] for r in profile["Roles"]]
+
+        # --- Role 결정: Profile에 이미 연결된 Role이 있으면 그대로 사용 ---
+        if existing_roles:
+            role_name = existing_roles[0]
+            logger.info("  기존 Role 업데이트: %s", role_name)
+        else:
+            try:
+                self.iam.create_role(
+                    RoleName=role_name,
+                    AssumeRolePolicyDocument=json.dumps(trust),
+                    Description="OpenClaw Bedrock EC2 role",
                 )
+                logger.info("  Role 생성: %s", role_name)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "EntityAlreadyExists":
+                    raise
+                logger.info("  Role 재사용: %s", role_name)
+
             self.iam.add_role_to_instance_profile(
                 InstanceProfileName=profile_name, RoleName=role_name,
             )
 
-        # IAM eventual consistency: Role이 연결된 상태로 EC2에서 사용 가능해질 때까지 폴링
+        # --- Trust Policy / Inline Policy / Managed Policy 업데이트 ---
+        self.iam.update_assume_role_policy(
+            RoleName=role_name, PolicyDocument=json.dumps(trust),
+        )
+        self.iam.put_role_policy(
+            RoleName=role_name, PolicyName="BedrockAccess",
+            PolicyDocument=json.dumps(bedrock_policy),
+        )
+        logger.info("  인라인 정책 업데이트: BedrockAccess → %s", role_name)
+
+        try:
+            attached = self.iam.list_attached_role_policies(RoleName=role_name)
+            current_arns = {p["PolicyArn"] for p in attached["AttachedPolicies"]}
+            for policy_arn in managed_policies:
+                if policy_arn not in current_arns:
+                    self.iam.attach_role_policy(RoleName=role_name, PolicyArn=policy_arn)
+                    logger.info("  매니지드 정책 추가: %s", policy_arn)
+        except ClientError:
+            pass
+
+        # IAM eventual consistency
         logger.info("  IAM Profile 전파 대기중...")
         for attempt in range(20):
             try:

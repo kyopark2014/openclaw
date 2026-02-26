@@ -1,7 +1,7 @@
 # OpenClaw AWS 배포 리소스 정보
 
 ## 생성 시각 (UTC)
-- 2026-02-26T06:28:13.715914+00:00
+- 2026-02-26T12:35:57.782024+00:00
 
 ## 핵심 리소스
 
@@ -19,7 +19,7 @@
 | Target Group | arn:aws:elasticloadbalancing:us-west-2:262976740991:targetgroup/tg-openclaw/1cf3efb16800c850 |
 | Bedrock VPC Endpoint | vpce-03a198160878e57de |
 | NAT Gateway | nat-01b58a29959b058dd |
-| IAM Role | openclaw-bedrock-role |
+| IAM Role | OpenClaw-Bedrock-Role |
 | Instance Profile | openclaw-bedrock-profile |
 | CloudFront | E3QKG8DNMHEG82 (d3u6aurginhbnw.cloudfront.net) |
 
@@ -29,7 +29,7 @@
 
 ## Gateway Token
 ```
-e2ad0a07764142a35634dde912952f0554467e721371ab3a763b65c688144993
+b6f04e6c2b7dec62a146c66cc1ab8c9a9fd47c731ae50f87af1ba7f4bb86d40b
 ```
 
 ## Telegram
