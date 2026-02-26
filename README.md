@@ -248,19 +248,19 @@ python installer.py
 
 아래와 같은 정보를 확인합니다.
 
-<img width="601" alt="image" src="https://github.com/user-attachments/assets/d172dd55-df27-4660-b263-6e3f43a99910" />
+<img width="500" alt="image" src="https://github.com/user-attachments/assets/d172dd55-df27-4660-b263-6e3f43a99910" />
 
 이때, 아래와 같이 Telegram의 token을 생성한 후에 입력합니다.
 
-<img width="800" src="https://github.com/user-attachments/assets/a84125fe-1d2f-4e53-b7a8-d5143bbd78b9" />
+<img width="600" src="https://github.com/user-attachments/assets/a84125fe-1d2f-4e53-b7a8-d5143bbd78b9" />
 
 설치가 완료되면 아래와 같은 화면이 보입니다.
 
-<img width="600" src="https://github.com/user-attachments/assets/2eb8c672-75b5-4e64-b397-8238d1d607c6" />
+<img width="500" src="https://github.com/user-attachments/assets/2eb8c672-75b5-4e64-b397-8238d1d607c6" />
 
 CloudFront의 주소로 접속한 후에 [Overview] - [Gateway Access] - [Gateway Token]에서 아래와 같이 gateway token을 입력합니다.
 
-<img width="800" src="https://github.com/user-attachments/assets/20385a1e-0695-4a35-bbd3-2fd4dbde5998" />
+<img width="600" src="https://github.com/user-attachments/assets/20385a1e-0695-4a35-bbd3-2fd4dbde5998" />
 
 Device를 등록하기 위해 SSM으로 접속합니다. 이때 아래와 같이 ec2-user로 전환합니다.
 
