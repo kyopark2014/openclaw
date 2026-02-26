@@ -166,7 +166,7 @@ openclaw devices list
 
 이때의 결과는 아래와 같습니다.
 
-<img width="800" alt="noname" src="https://github.com/user-attachments/assets/f95424a7-0221-4513-9523-5183b2221288" />
+<img width="900" alt="noname" src="https://github.com/user-attachments/assets/f95424a7-0221-4513-9523-5183b2221288" />
 
 아래와 같이 접속한 디바이스에 권한을 부여합니다.
 
@@ -176,7 +176,7 @@ openclaw devices approve [Device ID]
 
 이때 request의 device id를 활용합니다.
 
-<img width="700" alt="noname" src="https://github.com/user-attachments/assets/a2c2945c-339a-4064-b721-e46110f1fe45" />
+<img width="600" alt="noname" src="https://github.com/user-attachments/assets/a2c2945c-339a-4064-b721-e46110f1fe45" />
 
 
 
