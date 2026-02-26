@@ -1,0 +1,65 @@
+{
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "loopback"
+  },
+  "models": {
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.us-west-2.amazonaws.com",
+        "auth": "aws-sdk",
+        "api": "bedrock-converse-stream",
+        "models": [
+          {
+            "id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+            "name": "Claude Sonnet 4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0.003,
+              "output": 0.015
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          },
+          {
+            "id": "us.anthropic.claude-opus-4-20250514-v1:0",
+            "name": "Claude Opus 4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0.015,
+              "output": 0.075
+            },
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      },
+      "workspace": "/home/ec2-user/clawd",
+      "compaction": {
+        "reserveTokensFloor": 20000,
+        "memoryFlush": {
+          "enabled": true,
+          "softThresholdTokens": 4000
+        }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "botToken": "YOUR_BOT_TOKEN_HERE",
+      "dmPolicy": "pairing",
+      "allowFrom": ["@your_username"],
+      "streamMode": "partial"
+    }
+  }
+}
