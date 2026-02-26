@@ -25,8 +25,13 @@ python installer.py
 
 <img width="500" alt="image" src="https://github.com/user-attachments/assets/d172dd55-df27-4660-b263-6e3f43a99910" />
 
-OpenClaw의 Gateway를 이용하면 Telegram을 이용해 접속할 수 있습니다. 이를 위해 아래와 같이 Telegram의 token을 준비하여 입력합니다.
+OpenClaw의 Gateway를 이용하면 Telegram을 이용해 접속할 수 있습니다. 이를 위해 아래와 같이 Telegram의 token을 준비하여 입력합니다. Telegram Token은 아래와 같이 얻을 수 있습니다.
 
+1. Telegram에서 [@BotFather](https://t.me/BotFather)와 대화 시작
+2. /newbot 명령 입력
+3. Bot 이름 입력 (예: OpenClaw Assistant)
+4. 이후 BotFather가 제공하는 token을 복사합니다.
+   
 <img width="600" src="https://github.com/user-attachments/assets/a84125fe-1d2f-4e53-b7a8-d5143bbd78b9" />
 
 설치가 완료되면 아래와 같은 화면이 보입니다.
@@ -178,14 +183,7 @@ openclaw health --verbose
 ```
 
 
-### Remote 설정
 
-Telegram을 이용해 외부에서 접속합니다. 2026.02 (현재)에는 보안 이슈로 WhatsApp은 ALB - EC2를 이용해 접속이 불가합니다. Slack은 사용이 가능하나 상용 계정이 제공하는 App token이 필요합니다. Telegram Token은 아래와 같이 얻을 수 있습니다.
-
-1. Telegram에서 [@BotFather](https://t.me/BotFather)와 대화 시작
-2. /newbot 명령 입력
-3. Bot 이름 입력 (예: OpenClaw Assistant)
-4. 이후 BotFather가 제공하는 token을 복사합니다.
 
 ### Kiro-Cli 설치
 
