@@ -2,7 +2,7 @@
 
 전체적인 Architecture는 아래와 같습니다.
 
-<img width="900" alt="image" src="https://github.com/user-attachments/assets/3e24f638-ab75-460c-a63f-bf0edca69d15" />
+<img width="1100" alt="image" src="https://github.com/user-attachments/assets/3e24f638-ab75-460c-a63f-bf0edca69d15" />
 
 ## Install
 
