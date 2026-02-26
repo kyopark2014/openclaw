@@ -235,3 +235,8 @@ sudo systemctl status openclaw-gateway.service
 ```text
 sudo journalctl -u openclaw-gateway.service -f
 ```
+
+## 설치
+
+<img width="800" alt="image" src="https://github.com/user-attachments/assets/84f62e92-0da9-4c1d-9e3a-3838532672c0" />
+
