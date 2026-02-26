@@ -157,5 +157,36 @@ openclaw devices list
 openclaw devices approve [Device ID]
 ```
 
+## Kiro-Cli 설치
 
+아래와 같이 설치합니다.
 
+```text
+curl -fsSL https://cli.kiro.dev/install | bash
+```
+
+SSM으로 접속시 ec2-user로 전환합니다.
+
+```text
+sudo su - ec2-user
+```
+
+아래 방식으로 인증을 할 수 있습니다.
+
+```text
+$ kiro-cli login --use-device-flow
+✔ Select login method · Use for Free with Builder ID
+
+Confirm the following code in the browser
+Code: VNCC-PKNS
+
+Open this URL: https://view.awsapps.com/start/#/device?user_code=VNCC-PKNS
+Device authorized
+Logged in successfully
+```
+
+아래와 같이 실행합니다. 모델 설정은 claude-opus-4.6, claude-sonnet-4.6, claude-opus-4.5, claude-sonnet-4.5, claude-sonnet-4, claude-haiku-4.5, deepseek-3.2, minimax-m2.1, qwen3-coder-next 와 같이 선택할 수 있습니다.
+
+```python
+kiro-cli chat --model claude-sonnet-4.6
+```
