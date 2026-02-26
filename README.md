@@ -176,7 +176,7 @@ openclaw devices approve [Device ID]
 
 이때 request의 device id를 활용합니다.
 
-<img width="800" alt="noname" src="https://github.com/user-attachments/assets/a2c2945c-339a-4064-b721-e46110f1fe45" />
+<img width="700" alt="noname" src="https://github.com/user-attachments/assets/a2c2945c-339a-4064-b721-e46110f1fe45" />
 
 
 
