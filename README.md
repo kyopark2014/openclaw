@@ -27,7 +27,7 @@ python installer.py
 
 OpenClaw의 Gateway를 이용하면 Telegram을 이용해 접속할 수 있습니다. 이를 위해 아래와 같이 Telegram의 token을 준비하여 입력합니다. Telegram Token은 아래와 같이 얻을 수 있습니다.
 
-1. Telegram에서 [@BotFather](https://t.me/BotFather)와 대화 시작
+1. Telegram에서 [@BotFather](https://t.me/BotFather)와 대화 시작하거나, https://t.me/BotFather에 접속합니다.
 2. /newbot 명령 입력
 3. Bot 이름 입력 (예: OpenClaw Assistant)
 4. 이후 BotFather가 제공하는 token을 복사합니다.
