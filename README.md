@@ -190,3 +190,24 @@ Logged in successfully
 ```python
 kiro-cli chat --model claude-sonnet-4.6
 ```
+
+
+## Gateway restart
+
+EC2에서 아래 명령어로 gateway를 재시작하세요:
+
+```text
+sudo systemctl restart openclaw-gateway.service
+```
+
+상태 확인은 아래와 같이 수행합니다.
+
+```text
+sudo systemctl status openclaw-gateway.service
+```
+
+로그 확인이 필요할때에는 아래와 같이 수행합니다.
+
+```text
+sudo journalctl -u openclaw-gateway.service -f
+```
