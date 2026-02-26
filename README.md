@@ -222,4 +222,10 @@ kiro-cli chat --model claude-sonnet-4.6
 
 ## Reference
 
+[OpenClaw — Personal AI Assistant](https://github.com/openclaw/openclaw)
+
+[Getting Started](https://docs.openclaw.ai/start/getting-started)
+
+[openclaw on AWS with Bedrock](https://github.com/aws-samples/sample-OpenClaw-on-AWS-with-Bedrock?tab=readme-ov-file)
+
 
