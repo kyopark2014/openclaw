@@ -187,16 +187,16 @@ openclaw health --verbose
 
 ### Kiro-Cli 설치
 
-아래와 같이 설치합니다.
-
-```text
-curl -fsSL https://cli.kiro.dev/install | bash
-```
-
 SSM으로 접속시 ec2-user로 전환합니다.
 
 ```text
 sudo su - ec2-user
+```
+
+아래와 같이 설치합니다.
+
+```text
+curl -fsSL https://cli.kiro.dev/install | bash
 ```
 
 아래 방식으로 인증을 할 수 있습니다.
