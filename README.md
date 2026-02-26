@@ -1,6 +1,6 @@
 # OpenClaw
 
-전체적인 Architecture는 아래와 같습니다.
+전체적인 Architecture는 아래와 같습니다. OpenClaw는 EC2에 설치합니다. HTTPS로 접속하기 위해 CloudFront - ALB - EC2의 구조를 활용합니다. 여기서 EC2는 VPC의 private subnet에 위치하게 되고, 외부로 나갈때에는 NAT를 이용합니다. OpenClaw는 Dashboard의 chat을 이용해 접속하거나 Telegram을 이용해 활용할 수 있습니다. Telegram은 OpenClaw의 gateway를 이용해 연결됩니다. OpenClaw는 MCP, Skill을 활용할 수 있습니다.
 
 <img width="1100" alt="image" src="https://github.com/user-attachments/assets/96efea94-2640-4d01-85e1-ac5c90557695" />
 
