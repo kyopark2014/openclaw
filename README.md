@@ -238,5 +238,14 @@ sudo journalctl -u openclaw-gateway.service -f
 
 ## 설치
 
+CloudFront의 주소를 접속합니다.
+
+이때, [Overview] - [Gateway Access] - [Gateway Token]에 아래와 같이 접속해서 token을 입력합니다.
+
+<img width="800" src="https://github.com/user-attachments/assets/20385a1e-0695-4a35-bbd3-2fd4dbde5998" />
+
+
+이후 [Chat]에서 아래와 같이 OpenClaw의 Agent와 대화를 할 수 있습니다.
+
 <img width="800" alt="image" src="https://github.com/user-attachments/assets/84f62e92-0da9-4c1d-9e3a-3838532672c0" />
 
