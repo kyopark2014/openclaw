@@ -238,11 +238,60 @@ sudo journalctl -u openclaw-gateway.service -f
 
 ## 설치
 
-CloudFront의 주소를 접속합니다.
+설치가 완료되면 아래와 같은 화면이 보입니다.
 
-이때, [Overview] - [Gateway Access] - [Gateway Token]에 아래와 같이 접속해서 token을 입력합니다.
+<img width="600" src="https://github.com/user-attachments/assets/2eb8c672-75b5-4e64-b397-8238d1d607c6" />
+
+CloudFront의 주소로 접속한 후에 [Overview] - [Gateway Access] - [Gateway Token]에서 아래와 같이 gateway token을 입력합니다.
 
 <img width="800" src="https://github.com/user-attachments/assets/20385a1e-0695-4a35-bbd3-2fd4dbde5998" />
+
+## Device 추가
+
+### 설치하기
+
+아래와 같이 [installer.py](./installer.py)로 설치를 시작합니다.
+
+```text
+python installer.py
+```
+
+아래와 같은 정보를 확인합니다.
+
+<img width="601" alt="image" src="https://github.com/user-attachments/assets/d172dd55-df27-4660-b263-6e3f43a99910" />
+
+이때, 아래와 같이 Telegram의 token을 생성한 후에 입력합니다.
+
+<img width="800" src="https://github.com/user-attachments/assets/a84125fe-1d2f-4e53-b7a8-d5143bbd78b9" />
+
+
+SSM으로 접속시 ec2-user로 전환합니다.
+
+```text
+sudo su - ec2-user
+```
+
+openclaw의 device 리스트를 확인합니다.
+
+```text
+openclaw devices list
+```
+
+이때의 결과는 아래와 같습니다.
+
+<img width="900" alt="noname" src="https://github.com/user-attachments/assets/f95424a7-0221-4513-9523-5183b2221288" />
+
+아래와 같이 접속한 디바이스에 권한을 부여합니다.
+
+```text
+openclaw devices approve [Device ID]
+```
+
+이때 request의 device id를 활용합니다.
+
+<img width="600" alt="noname" src="https://github.com/user-attachments/assets/a2c2945c-339a-4064-b721-e46110f1fe45" />
+
+
 
 
 이후 [Chat]에서 아래와 같이 OpenClaw의 Agent와 대화를 할 수 있습니다.
