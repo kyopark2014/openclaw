@@ -80,7 +80,7 @@ openclaw devices approve [Device ID]
 
 ### 설치하기
 
-[Quick setup (CLI)](https://docs.openclaw.ai/start/getting-started)에 따라 아래와 같이 OpenCrew를 다운로드 합니다.
+[Quick setup (CLI)](https://docs.openclaw.ai/start/getting-started)에 따라 아래와 같이 OpenCrew를 설치합니다.
 
 ```text
 curl -fsSL https://openclaw.ai/install.sh | bash
