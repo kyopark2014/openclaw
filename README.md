@@ -183,6 +183,30 @@ openclaw health --verbose
 ```
 
 
+### Cron
+
+- 등록된 cron 목록 보기
+
+```text
+openclaw cron list
+
+- 즉시 테스트 실행
+
+```text
+openclaw cron run daily-weather
+```
+
+- 비활성화/활성화
+
+```text
+openclaw cron disable daily-weather
+```
+
+- 삭제
+
+```text
+openclaw cron rm daily-weather
+```
 
 
 ### Kiro-Cli 설치
