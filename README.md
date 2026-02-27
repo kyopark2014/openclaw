@@ -325,7 +325,7 @@ Logged in successfully
 kiro-cli chat --model claude-sonnet-4.6
 ```
 
-### Gmail 등록
+### Gmail 등록 (EC2에서 시도시 잘 안되어서 추후 다시 시도 예정)
 
 1. [Google Cloud Console](https://console.cloud.google.com)에서 OAuth 클라이언트를 만들기 위해 새 프로젝트 생성 (또는 기존 프로젝트 선택)을 수행합니다.
 
