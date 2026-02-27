@@ -325,6 +325,27 @@ Logged in successfully
 kiro-cli chat --model claude-sonnet-4.6
 ```
 
+### Gmail 등록
+
+1. [Google Cloud Console](https://console.cloud.google.com)에서 OAuth 클라이언트를 만들기 위해 새 프로젝트 생성 (또는 기존 프로젝트 선택)을 수행합니다.
+
+2. API 활성화를 위해 Gmail API, Google Calendar API, Google Drive API 을 설정합니다.
+
+
+3. OAuth 동의 화면 구성은 "User Type: External"로 하고, 테스트 사용자에 본인 이메일 추가합니다.
+   
+4. OAuth 클라이언트 ID를 생성합니다.
+
+- Application type: Desktop app
+
+- 이름: "OpenClaw gog"
+
+5. client_secret_xxx.json를 다운로드 한 후에 아래와 같이 등록합니다.
+
+```text
+gog auth credentials ~/Downloads/client_secret_xxx.json
+gog auth add 이메일@gmail.com
+```
 
 ## Reference
 
