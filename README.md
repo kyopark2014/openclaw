@@ -182,6 +182,87 @@ Health 체크를 아래와 같이 수행할 수 있습니다.
 openclaw health --verbose
 ```
 
+### Skill
+
+아래와 같이 skill을 추가할 수 있습니다.
+
+#### 방법 1: Workspace에 스킬 추가
+
+```text
+# 1. 스킬 디렉토리 생성
+mkdir -p ~/.openclaw/workspace/skills/my-skill
+
+# 2. SKILL.md 작성
+cat > ~/.openclaw/workspace/skills/my-skill/SKILL.md << 'EOF'
+---
+name: my_skill
+description: 내가 만든 스킬 설명
+---
+
+# My Skill
+
+스킬 사용 방법과 지시사항을 여기에 작성...
+EOF
+
+# 3. 자동 인식 (watch 켜져 있으면 바로 반영)
+```
+
+#### 방법 2: 외부 디렉토리 연결
+
+아래와 같이 ~/.openclaw/openclaw.json 파일에 추가할 수 있습니다.
+
+```java
+{
+  "skills": {
+    "load": {
+      "extraDirs": [
+        "/home/ec2-user/my-skills",
+        "~/Projects/team-skills"
+      ],
+      "watch": true
+    }
+  }
+}
+```
+
+Skill의 enable/disable 설정은 아래와 같이 수행합니다.
+
+```java
+{
+  "skills": {
+    "entries": {
+      "weather": {
+        "enabled": true
+      },
+      "some-skill": {
+        "enabled": false,
+        "env": {
+          "API_KEY": "your-key-here"
+        }
+      }
+    }
+  }
+}
+```
+
+#### Skill Command
+
+- 모든 스킬 목록
+```text
+openclaw skills list
+```
+
+- 스킬 상세 정보
+
+```text
+openclaw skills info weather
+```
+
+- 스킬 요구사항 체크
+
+```text
+openclaw skills check
+```
 
 ### Cron
 
