@@ -325,7 +325,9 @@ Logged in successfully
 kiro-cli chat --model claude-sonnet-4.6
 ```
 
-### Gmail 등록 (EC2에서 시도시 잘 안되어서 추후 다시 시도 예정)
+### Gmail 등록 
+
+먼저 json 형태의 credential을 다운받아야 합니다. 아래와 같은 작업을 수행합니다.
 
 1. [Google Cloud Console](https://console.cloud.google.com)에서 OAuth 클라이언트를 만들기 위해 새 프로젝트 생성 (또는 기존 프로젝트 선택)을 수행합니다.
 
@@ -338,14 +340,18 @@ kiro-cli chat --model claude-sonnet-4.6
 
 - Application type: Desktop app
 
-- 이름: "OpenClaw gog"
+- 이름: "OpenClaw"
 
-5. client_secret_xxx.json를 다운로드 한 후에 아래와 같이 등록합니다.
+5. client_secret_xxx.json를 다운로드합니다.
+
+브라우저가 있으면 아래와 같이 수행합니다.
 
 ```text
 gog auth credentials ~/Downloads/client_secret_xxx.json
 gog auth add 이메일@gmail.com
 ```
+
+EC2와 같이 브라우저가 없는 경우에 dashboard에 접속해서 chat에서 "gmail을 등록해주세요"라고 입력후 주어진 가이드에 따라 수행합니다. "gog auth add"를 수행시 localhost로 수행되는 url을 받아서 client에서 수행하여야 하므로 dashboard의 chat에서 수행하여야 합니다.
 
 ## Reference
 
