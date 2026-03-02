@@ -327,6 +327,12 @@ kiro-cli chat --model claude-sonnet-4.6
 
 ### Gmail 등록 
 
+GOG CLI를 설치합니다. 
+
+```text
+brew install steipete/tap/gogcli
+```
+
 먼저 json 형태의 credential을 다운받아야 합니다. 아래와 같은 작업을 수행합니다.
 
 1. [Google Cloud Console](https://console.cloud.google.com)에서 OAuth 클라이언트를 만들기 위해 새 프로젝트 생성 (또는 기존 프로젝트 선택)을 수행합니다.
@@ -347,8 +353,19 @@ kiro-cli chat --model claude-sonnet-4.6
 브라우저가 있으면 아래와 같이 수행합니다.
 
 ```text
-gog auth credentials ~/Downloads/client_secret_xxx.json
-gog auth add 이메일@gmail.com
+gog auth credentials /path/to/client_secret_xxx.json
+```
+
+이후 아래와 같이 메 일주소를 등록합니다. service를 지정하지 않으면 appscript, calendar, chat, classroom, contacts, docs, drive, forms, gmail, people, sheets, slides, tasks가 등록됩니다.
+
+```text
+gog auth add your-email@gmail.com
+```
+
+지정을 하면 아래와 같이 일부만 허용할 수 있습니다.
+
+```text
+gog auth add your-email@gmail.com --services gmail,calendar,drive,contacts
 ```
 
 EC2와 같이 브라우저가 없는 경우에 dashboard에 접속해서 chat에서 "gmail을 등록해주세요"라고 입력후 주어진 가이드에 따라 수행합니다. "gog auth add"를 수행시 localhost로 수행되는 url을 받아서 client에서 수행하여야 하므로 dashboard의 chat에서 수행하여야 합니다.
