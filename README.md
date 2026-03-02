@@ -376,34 +376,6 @@ gog auth list
 
 EC2와 같이 브라우저가 없는 경우에 dashboard에 접속해서 chat에서 "gmail을 등록해주세요"라고 입력후 주어진 가이드에 따라 수행합니다. "gog auth add"를 수행시 localhost로 수행되는 url을 받아서 client에서 수행하여야 하므로 dashboard의 chat에서 수행하여야 합니다.
 
-### Web Fetch
-
-"mcp-server-fetch-typescript"는 playwright 기반의 URL 내용 추출에 용이합니다. HTML을 Markdown/Text 변환하므로 빠르고 편리하나, 단순 HTTP GET만 수행하고 JS로 동적 생성되는 콘텐츠는 못 가져옵니다. 이를 위해 [mcp_config.py](./application/mcp_config.py)에 아래의 MCP 조건을 추가합니다.
-
-```java
-{
-   "mcpServers": {
-       "web_fetch": {
-           "command": "npx",
-           "args": ["-y", "mcp-server-fetch-typescript"]
-       }
-   }
-}
-```
-
-또한, [Dockerfile](./Dockerfile)에도 아래 내용을 추가합니다.
-
-```text
-RUN npx -y mcp-server-fetch-typescript --version 2>/dev/null || true && \
-    npx playwright install --with-deps chromium
-```
-
-MAC같은 local 환경에서 실행시 아래와 같이 수동으로 설치합니다.
-
-```text
-npx playwright install --with-deps chromium
-```
-
 
 ## Reference
 
