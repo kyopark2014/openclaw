@@ -342,7 +342,7 @@ brew install steipete/tap/gogcli
 
 3. OAuth 동의 화면 구성은 "User Type: External"로 하고, 테스트 사용자에 본인 이메일 추가합니다.
    
-4. OAuth 클라이언트 ID를 생성합니다.
+4. OAuth 클라이언트 ID를 생성합니다. 이때 사용할 gmail을 테스트 사용자로 등록하여야 합니다.
 
 - Application type: Desktop app
 
