@@ -392,15 +392,15 @@ python uninstaller.py
 python add_content.py
 ```
 
-[Amazon S3](https://us-west-2.console.aws.amazon.com/s3/home?region=us-west-2)에 접속하여 파일을 직접 업로드 후에 [Amazon Bedrock Knowledge Base](https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/knowledge-bases)에서 sync를 선택할 수 있습니다. [installer.py](./installer.py)로 인프라를 생성하였다면, bucket 이름이 "storage-for-{project}-{account_id}-{region}"를 선택하여 업로드를 합니다.
+다른 방법으로 [Amazon S3](https://us-west-2.console.aws.amazon.com/s3/home?region=us-west-2)에 접속하여 파일을 직접 업로드 후에 [Amazon Bedrock Knowledge Base](https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/knowledge-bases)에서 sync를 선택할 수 있습니다. [installer.py](./installer.py)로 인프라를 생성하였다면, bucket 이름이 "storage-for-{project}-{account_id}-{region}"와 같이 생성됩니다. 이 버켓을 선택하여 파일을 업로드할 수 있습니다.
 
 아래와 같이 Amazon S3의 docs에 파일을 업로드합니다.
 
-<img width="1119" height="496" alt="image" src="https://github.com/user-attachments/assets/285b1284-e8bb-407d-8ec1-7934dce5f5d2" />
+<img width="900" alt="image" src="https://github.com/user-attachments/assets/285b1284-e8bb-407d-8ec1-7934dce5f5d2" />
 
 [Amazon Bedrock Knowledge Base](https://us-west-2.console.aws.amazon.com/bedrock/home?region=us-west-2#/knowledge-bases)에서 "openclaw"라는 Knowledge Base를 선택합니다. 이후 아래와 같이 Data Source를 선택하고 나서 [Sync]를 선택합니다. 
 
-<img width="1159" height="364" alt="noname" src="https://github.com/user-attachments/assets/7d9355f2-5b76-478c-95c6-cfef2dd6bd9f" />
+<img width="900" alt="noname" src="https://github.com/user-attachments/assets/7d9355f2-5b76-478c-95c6-cfef2dd6bd9f" />
 
 문서 동기화가 끝나고 나면 아래와 같이 Telegram에서 메시지를 입력하면 RAG의 관련된 문서를 기반으로 답변을 얻을 수 있습니다.
 
