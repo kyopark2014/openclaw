@@ -36,7 +36,7 @@ INSTANCE_TYPE = "t3.medium"
 GATEWAY_PORT = 18789
 VOLUME_SIZE = 50
 CONFIG_PATH = Path("openclaw-config.json")
-DEPLOYMENT_INFO_PATH = Path("deployment-info.md")
+DEPLOYMENT_INFO_PATH = Path("assets/deployment-info.md")
 SKILLS_PATH = Path(__file__).resolve().parent / "skills"
 
 # ---------------------------------------------------------------------------
@@ -228,15 +228,23 @@ class Installer:
         knowledge_base_id = None
         skills_s3_uri = None
 
+        # Skills 업로드: KB 활성화 시 또는 skills 폴더가 있으면 S3에 업로드
+        needs_s3_for_skills = SKILLS_PATH.exists() and SKILLS_PATH.is_dir()
         if enable_knowledge_base:
             _step("S3 Bucket 생성 (Knowledge Base용)")
             s3_bucket_name = self._create_s3_bucket()
-            if SKILLS_PATH.exists() and SKILLS_PATH.is_dir():
+            if needs_s3_for_skills:
                 _step("Skills 폴더 S3 업로드")
                 self._upload_skills_to_s3(s3_bucket_name, SKILLS_PATH)
                 skills_s3_uri = f"s3://{s3_bucket_name}/artifacts/skills/"
             _step("Knowledge Base IAM Role 생성")
             knowledge_base_role_arn = self._ensure_knowledge_base_role()
+        elif needs_s3_for_skills:
+            _step("S3 Bucket 생성 (Skills용)")
+            s3_bucket_name = self._create_s3_bucket()
+            _step("Skills 폴더 S3 업로드")
+            self._upload_skills_to_s3(s3_bucket_name, SKILLS_PATH)
+            skills_s3_uri = f"s3://{s3_bucket_name}/artifacts/skills/"
 
         _step("IAM Role + Instance Profile")
         role_name, profile_name, profile_arn = self._ensure_iam(
@@ -1201,7 +1209,7 @@ class Installer:
             "timedatectl set-timezone Asia/Seoul || true",
             "npm install -g openclaw@latest",
             "",
-            "mkdir -p /home/ec2-user/.openclaw /home/ec2-user/clawd /home/ec2-user/.openclaw/workspace/skills",
+            "mkdir -p /home/ec2-user/.openclaw /home/ec2-user/clawd /home/ec2-user/clawd/skills",
             "cat > /home/ec2-user/.openclaw/openclaw.json <<'OCJSON'",
             config_json,
             "OCJSON",
@@ -1212,8 +1220,14 @@ class Installer:
         ]
         if skills_s3_uri:
             lines.extend([
-                f'aws s3 cp "{skills_s3_uri}" /home/ec2-user/.openclaw/workspace/skills/ --recursive',
-                "chown -R ec2-user:ec2-user /home/ec2-user/.openclaw/workspace/skills",
+                'echo "=== Skills S3에서 복사 중 ==="',
+                "for i in 1 2 3 4 5; do",
+                f'  aws s3 cp "{skills_s3_uri}" /home/ec2-user/clawd/skills/ --recursive && break',
+                '  echo "Skills 복사 재시도 $i/5 (IAM 전파 대기)..."',
+                "  sleep 10",
+                "done",
+                "ls -la /home/ec2-user/clawd/skills/ 2>/dev/null || true",
+                "chown -R ec2-user:ec2-user /home/ec2-user/clawd/skills",
                 "",
             ])
         lines.extend([
@@ -1862,6 +1876,25 @@ class Installer:
               --parameters 'commands=["tail -100 /var/log/openclaw-install.log"]' \\
               --region {o["region"]}
             ```
+        """)
+        if o.get("s3_bucket"):
+            md += textwrap.dedent(f"""
+
+            ## Skills 수동 동기화 (pptx, retrieve 등)
+            EC2에 skills가 복사되지 않은 경우, 로컬에서 S3로 업로드 후 아래 명령으로 동기화:
+            ```bash
+            # 1) 로컬에서 skills S3 업로드 (프로젝트 루트에서)
+            aws s3 cp skills/ s3://{o["s3_bucket"]}/artifacts/skills/ --recursive --region {o["region"]}
+
+            # 2) EC2에서 S3 → clawd/skills 복사
+            aws ssm send-command \\
+              --document-name "AWS-RunShellScript" \\
+              --instance-ids "{o["instance_id"]}" \\
+              --parameters 'commands=["aws s3 cp s3://{o["s3_bucket"]}/artifacts/skills/ /home/ec2-user/clawd/skills/ --recursive","chown -R ec2-user:ec2-user /home/ec2-user/clawd/skills","sudo systemctl restart openclaw-gateway.service"]' \\
+              --region {o["region"]}
+            ```
+            """)
+        md += textwrap.dedent("""
 
             ## 서비스 관리
             ```bash
@@ -1891,6 +1924,7 @@ class Installer:
             aws cloudfront create-invalidation --distribution-id {o["cloudfront_id"]} --paths "/docs/*" --region {o["region"]}
             ```
             """)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(md, encoding="utf-8")
         logger.info("  %s 생성 완료", path)
 
