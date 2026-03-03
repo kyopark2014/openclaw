@@ -37,6 +37,7 @@ GATEWAY_PORT = 18789
 VOLUME_SIZE = 50
 CONFIG_PATH = Path("openclaw-config.json")
 DEPLOYMENT_INFO_PATH = Path("deployment-info.md")
+SKILLS_PATH = Path(__file__).resolve().parent / "skills"
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -170,6 +171,9 @@ class Installer:
         self.elbv2 = self.session.client("elbv2")
         self.cf = self.session.client("cloudfront")
         self.sts = self.session.client("sts")
+        self.s3 = self.session.client("s3")
+        self.opensearch = self.session.client("opensearchserverless")
+        self.bedrock_agent = self.session.client("bedrock-agent")
         try:
             self.account_id = self.sts.get_caller_identity()["Account"]
         except NoCredentialsError:
@@ -192,13 +196,17 @@ class Installer:
         ami_id: str = AMI_ID,
         volume_size: int = VOLUME_SIZE,
         enable_cloudfront: bool = True,
+        enable_knowledge_base: bool = True,
         config_path: Path = CONFIG_PATH,
         deployment_info_path: Path = DEPLOYMENT_INFO_PATH,
     ) -> Dict[str, Any]:
         if telegram_allow_from is None:
             telegram_allow_from = ["*"]
 
-        total = 10 if enable_cloudfront else 9
+        kb_steps = 5 if enable_knowledge_base else 0  # S3, KB Role, OpenSearch, Index, KB
+        if enable_knowledge_base and SKILLS_PATH.exists() and SKILLS_PATH.is_dir():
+            kb_steps += 1  # Skills 업로드
+        total = 10 + kb_steps if enable_cloudfront else 9 + kb_steps
         step = 0
 
         def _step(desc: str) -> None:
@@ -214,8 +222,26 @@ class Installer:
         public_subnets = net["public_subnets"]
         private_subnets = net["private_subnets"]
 
+        s3_bucket_name = None
+        knowledge_base_role_arn = None
+        opensearch_info = None
+        knowledge_base_id = None
+        skills_s3_uri = None
+
+        if enable_knowledge_base:
+            _step("S3 Bucket 생성 (Knowledge Base용)")
+            s3_bucket_name = self._create_s3_bucket()
+            if SKILLS_PATH.exists() and SKILLS_PATH.is_dir():
+                _step("Skills 폴더 S3 업로드")
+                self._upload_skills_to_s3(s3_bucket_name, SKILLS_PATH)
+                skills_s3_uri = f"s3://{s3_bucket_name}/artifacts/skills/"
+            _step("Knowledge Base IAM Role 생성")
+            knowledge_base_role_arn = self._ensure_knowledge_base_role()
+
         _step("IAM Role + Instance Profile")
-        role_name, profile_name, profile_arn = self._ensure_iam()
+        role_name, profile_name, profile_arn = self._ensure_iam(
+            knowledge_base_role_arn=knowledge_base_role_arn,
+        )
 
         _step("Security Groups (EC2, ALB)")
         ec2_sg = _get_or_create_sg(self.ec2, vpc_id, f"{self.project}-ec2-sg", "OpenClaw EC2 SG")
@@ -235,6 +261,30 @@ class Installer:
 
         _step("Bedrock Runtime VPC Endpoint")
         vpce_id = self._ensure_bedrock_endpoint(vpc_id, private_subnets, ec2_sg)
+        if enable_knowledge_base:
+            self._ensure_vpc_endpoint(
+                vpc_id, private_subnets, ec2_sg,
+                f"com.amazonaws.{self.region}.bedrock-agent-runtime",
+            )
+
+        if enable_knowledge_base and knowledge_base_role_arn and s3_bucket_name:
+            ec2_role_arn = f"arn:aws:iam::{self.account_id}:role/{role_name}"
+            _step("OpenSearch Serverless Collection 생성")
+            opensearch_info = self._create_opensearch_collection(
+                ec2_role_arn=ec2_role_arn,
+                knowledge_base_role_arn=knowledge_base_role_arn,
+            )
+            _step("OpenSearch Vector Index 생성")
+            self._create_vector_index_in_opensearch(
+                opensearch_info["endpoint"],
+                self.project,
+            )
+            _step("Knowledge Base 생성")
+            knowledge_base_id = self._create_knowledge_base(
+                opensearch_info=opensearch_info,
+                knowledge_base_role_arn=knowledge_base_role_arn,
+                s3_bucket_name=s3_bucket_name,
+            )
 
         _step("EC2 UserData 렌더링")
         gw_token = secrets.token_hex(32)
@@ -246,6 +296,8 @@ class Installer:
             telegram_allow_from=telegram_allow_from,
             telegram_stream_mode=telegram_stream_mode,
             config_path=config_path,
+            knowledge_base_id=knowledge_base_id,
+            skills_s3_uri=skills_s3_uri,
         )
 
         _step("EC2 인스턴스 생성 (Private Subnet)")
@@ -299,6 +351,9 @@ class Installer:
             "telegram_dm_policy": telegram_dm_policy,
             "telegram_allow_from": telegram_allow_from,
             "telegram_stream_mode": telegram_stream_mode,
+            "s3_bucket": s3_bucket_name,
+            "knowledge_base_id": knowledge_base_id,
+            "opensearch_endpoint": (opensearch_info or {}).get("endpoint"),
         }
         self._write_deployment_info(deployment_info_path)
 
@@ -613,7 +668,10 @@ class Installer:
     # ==================================================================
     # IAM
     # ==================================================================
-    def _ensure_iam(self) -> tuple[str, str, str]:
+    def _ensure_iam(
+        self,
+        knowledge_base_role_arn: Optional[str] = None,
+    ) -> tuple[str, str, str]:
         role_name = f"{self.project}-bedrock-role"
         profile_name = f"{self.project}-bedrock-profile"
 
@@ -634,8 +692,11 @@ class Installer:
                         "bedrock:InvokeModel",
                         "bedrock:InvokeModelWithResponseStream",
                         "bedrock:ListFoundationModels",
+                        "bedrock:ListKnowledgeBases",
+                        "bedrock:GetKnowledgeBase",
                         "bedrock:GetFoundationModel",
                         "bedrock:GetInferenceProfile",
+                        "bedrock:Retrieve",
                     ],
                     "Resource": "*",
                 },
@@ -651,8 +712,28 @@ class Installer:
                     ],
                     "Resource": "*",
                 },
+                {
+                    "Effect": "Allow",
+                    "Action": ["cloudfront:ListDistributions"],
+                    "Resource": "*",
+                },
             ],
         }
+
+        # Knowledge Base 관련 정책 추가
+        if knowledge_base_role_arn:
+            bedrock_policy["Statement"].extend([
+                {
+                    "Effect": "Allow",
+                    "Action": ["aoss:APIAccessAll"],
+                    "Resource": ["*"],
+                },
+                {
+                    "Effect": "Allow",
+                    "Action": ["iam:PassRole"],
+                    "Resource": [knowledge_base_role_arn],
+                },
+            ])
 
         managed_policies = [
             "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
@@ -728,6 +809,310 @@ class Installer:
         return role_name, profile_name, profile_arn
 
     # ==================================================================
+    # Knowledge Base (S3, OpenSearch, KB)
+    # ==================================================================
+    def _create_s3_bucket(self) -> str:
+        """Knowledge Base용 S3 버킷 생성."""
+        bucket_name = f"storage-for-{self.project}-{self.account_id}-{self.region}"
+        try:
+            if self.region == "us-east-1":
+                self.s3.create_bucket(Bucket=bucket_name)
+            else:
+                self.s3.create_bucket(
+                    Bucket=bucket_name,
+                    CreateBucketConfiguration={"LocationConstraint": self.region},
+                )
+            logger.info("  S3 버킷 생성: %s", bucket_name)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] not in ("BucketAlreadyExists", "BucketAlreadyOwnedByYou"):
+                raise
+            logger.info("  S3 버킷 재사용: %s", bucket_name)
+
+        self.s3.put_public_access_block(
+            Bucket=bucket_name,
+            PublicAccessBlockConfiguration={
+                "BlockPublicAcls": True,
+                "IgnorePublicAcls": True,
+                "BlockPublicPolicy": True,
+                "RestrictPublicBuckets": True,
+            },
+        )
+        for folder in ["docs/", "artifacts/"]:
+            try:
+                self.s3.put_object(Bucket=bucket_name, Key=folder, Body=b"")
+            except ClientError:
+                pass
+        return bucket_name
+
+    def _upload_skills_to_s3(self, bucket_name: str, skills_path: Path) -> None:
+        """로컬 skills 폴더를 S3 artifacts/skills/ 에 업로드."""
+        prefix = "artifacts/skills"
+        count = 0
+        for p in skills_path.rglob("*"):
+            if p.is_file():
+                rel = p.relative_to(skills_path)
+                key = f"{prefix}/{rel}"
+                self.s3.upload_file(str(p), bucket_name, key)
+                count += 1
+        logger.info("  Skills 업로드: %d개 파일 → s3://%s/%s/", count, bucket_name, prefix)
+
+    def _ensure_knowledge_base_role(self) -> str:
+        """Knowledge Base용 IAM Role 생성 (Bedrock이 S3/OpenSearch 접근)."""
+        role_name = f"role-knowledge-base-for-{self.project}-{self.region}"
+        trust = {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": {"Service": "bedrock.amazonaws.com"},
+                "Action": "sts:AssumeRole",
+            }],
+        }
+        try:
+            self.iam.create_role(
+                RoleName=role_name,
+                AssumeRolePolicyDocument=json.dumps(trust),
+                Description=f"Knowledge Base role for {self.project}",
+            )
+            logger.info("  KB Role 생성: %s", role_name)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "EntityAlreadyExists":
+                raise
+            self.iam.update_assume_role_policy(
+                RoleName=role_name, PolicyDocument=json.dumps(trust),
+            )
+            logger.info("  KB Role 재사용: %s", role_name)
+
+        s3_policy = {
+            "Version": "2012-10-17",
+            "Statement": [{"Effect": "Allow", "Action": ["s3:*"], "Resource": ["*"]}],
+        }
+        aoss_policy = {
+            "Version": "2012-10-17",
+            "Statement": [{"Effect": "Allow", "Action": ["aoss:APIAccessAll"], "Resource": ["*"]}],
+        }
+        bedrock_policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": ["bedrock:GetInferenceProfile", "bedrock:InvokeModel"],
+                    "Resource": [
+                        f"arn:aws:bedrock:{self.region}:{self.account_id}:inference-profile/*",
+                        f"arn:aws:bedrock:{self.region}:*:inference-profile/*",
+                        "arn:aws:bedrock:*::foundation-model/*",
+                    ],
+                },
+            ],
+        }
+        self.iam.put_role_policy(
+            RoleName=role_name, PolicyName="kb-s3-policy",
+            PolicyDocument=json.dumps(s3_policy),
+        )
+        self.iam.put_role_policy(
+            RoleName=role_name, PolicyName="kb-opensearch-policy",
+            PolicyDocument=json.dumps(aoss_policy),
+        )
+        self.iam.put_role_policy(
+            RoleName=role_name, PolicyName="kb-bedrock-policy",
+            PolicyDocument=json.dumps(bedrock_policy),
+        )
+        role = self.iam.get_role(RoleName=role_name)
+        return role["Role"]["Arn"]
+
+    def _create_opensearch_collection(
+        self,
+        ec2_role_arn: str,
+        knowledge_base_role_arn: str,
+    ) -> Dict[str, str]:
+        """OpenSearch Serverless Collection 생성."""
+        collection_name = self.project
+        enc_name = f"enc-{self.project}-{self.region}"
+        net_name = f"net-{self.project}-{self.region}"
+        data_name = f"data-{self.project}"
+
+        # 기존 컬렉션 확인
+        for c in self.opensearch.list_collections().get("collectionSummaries", []):
+            if c.get("name") == collection_name and c.get("status") == "ACTIVE":
+                detail = self.opensearch.batch_get_collection(names=[collection_name])["collectionDetails"][0]
+                endpoint = detail.get("collectionEndpoint")
+                if not endpoint:
+                    for _ in range(60):
+                        time.sleep(10)
+                        detail = self.opensearch.batch_get_collection(names=[collection_name])["collectionDetails"][0]
+                        endpoint = detail.get("collectionEndpoint")
+                        if endpoint and detail.get("status") == "ACTIVE":
+                            break
+                logger.info("  OpenSearch Collection 재사용: %s", collection_name)
+                return {"arn": detail["arn"], "endpoint": endpoint}
+
+        # Encryption policy
+        try:
+            self.opensearch.create_security_policy(
+                name=enc_name, type="encryption",
+                description=f"Encryption for {self.project}",
+                policy=json.dumps({"Rules": [{"ResourceType": "collection", "Resource": [f"collection/{collection_name}"]}], "AWSOwnedKey": True}),
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConflictException":
+                raise
+
+        # Network policy
+        try:
+            self.opensearch.create_security_policy(
+                name=net_name, type="network",
+                description=f"Network for {self.project}",
+                policy=json.dumps([{
+                    "Rules": [
+                        {"ResourceType": "dashboard", "Resource": [f"collection/{collection_name}"]},
+                        {"ResourceType": "collection", "Resource": [f"collection/{collection_name}"]},
+                    ],
+                    "AllowFromPublic": True,
+                }]),
+            )
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConflictException":
+                raise
+
+        # Data access policy
+        principals = [f"arn:aws:iam::{self.account_id}:root", ec2_role_arn, knowledge_base_role_arn]
+        data_policy = [{
+            "Rules": [
+                {"Resource": [f"collection/{collection_name}"], "Permission": ["aoss:CreateCollectionItems", "aoss:DeleteCollectionItems", "aoss:UpdateCollectionItems", "aoss:DescribeCollectionItems"], "ResourceType": "collection"},
+                {"Resource": [f"index/{collection_name}/*"], "Permission": ["aoss:CreateIndex", "aoss:DeleteIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"], "ResourceType": "index"},
+            ],
+            "Principal": principals,
+        }]
+        try:
+            self.opensearch.create_access_policy(name=data_name, type="data", policy=json.dumps(data_policy))
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "ConflictException":
+                raise
+
+        time.sleep(5)
+        resp = self.opensearch.create_collection(
+            name=collection_name,
+            description=f"OpenSearch for {self.project}",
+            type="VECTORSEARCH",
+        )
+        arn = resp["createCollectionDetail"]["arn"]
+        logger.info("  OpenSearch Collection 생성: %s (ACTIVE 대기중...)", collection_name)
+        for _ in range(60):
+            time.sleep(10)
+            detail = self.opensearch.batch_get_collection(names=[collection_name])["collectionDetails"][0]
+            if detail.get("status") == "ACTIVE" and detail.get("collectionEndpoint"):
+                return {"arn": arn, "endpoint": detail["collectionEndpoint"]}
+        raise RuntimeError("OpenSearch Collection ACTIVE 대기 시간 초과")
+
+    def _create_vector_index_in_opensearch(self, collection_endpoint: str, index_name: str) -> None:
+        """OpenSearch에 vector index 생성."""
+        if not collection_endpoint or not collection_endpoint.strip():
+            raise ValueError("collection_endpoint 필요")
+        if not collection_endpoint.startswith(("http://", "https://")):
+            collection_endpoint = f"https://{collection_endpoint}"
+
+        try:
+            import requests
+            from requests_aws4auth import AWS4Auth
+        except ImportError:
+            import subprocess
+            import sys
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "requests-aws4auth"])
+            import requests
+            from requests_aws4auth import AWS4Auth
+
+        creds = self.session.get_credentials()
+        auth = AWS4Auth(creds.access_key, creds.secret_key, self.region, "aoss", session_token=creds.token)
+        url = f"{collection_endpoint.rstrip('/')}/{index_name}"
+
+        r = requests.get(url, auth=auth, timeout=30)
+        if r.status_code == 200:
+            logger.info("  Vector index 이미 존재: %s", index_name)
+            return
+
+        mapping = {
+            "settings": {"index": {"knn": True, "knn.algo_param.ef_search": 512}},
+            "mappings": {
+                "properties": {
+                    "vector_field": {"type": "knn_vector", "dimension": 1024, "method": {"name": "hnsw", "space_type": "cosinesimil", "engine": "faiss", "parameters": {"ef_construction": 512, "m": 16}}},
+                    "AMAZON_BEDROCK_TEXT": {"type": "text"},
+                    "AMAZON_BEDROCK_METADATA": {"type": "text"},
+                }
+            },
+        }
+        r = requests.put(url, auth=auth, headers={"Content-Type": "application/json"}, data=json.dumps(mapping), timeout=30)
+        if r.status_code not in (200, 201):
+            raise RuntimeError(f"Vector index 생성 실패: {r.status_code} - {r.text}")
+        logger.info("  Vector index 생성: %s", index_name)
+        time.sleep(30)
+
+    def _create_knowledge_base(
+        self,
+        opensearch_info: Dict[str, str],
+        knowledge_base_role_arn: str,
+        s3_bucket_name: str,
+    ) -> str:
+        """Knowledge Base 생성 (OpenSearch + S3 데이터 소스)."""
+        for kb in self.bedrock_agent.list_knowledge_bases().get("knowledgeBaseSummaries", []):
+            if kb.get("name") == self.project:
+                coll_arn = self.bedrock_agent.get_knowledge_base(knowledgeBaseId=kb["knowledgeBaseId"])["knowledgeBase"]["storageConfiguration"]["opensearchServerlessConfiguration"]["collectionArn"]
+                if coll_arn == opensearch_info["arn"]:
+                    logger.info("  Knowledge Base 재사용: %s", kb["knowledgeBaseId"])
+                    return kb["knowledgeBaseId"]
+
+        resp = self.bedrock_agent.create_knowledge_base(
+            name=self.project,
+            description="Knowledge base based on OpenSearch",
+            roleArn=knowledge_base_role_arn,
+            knowledgeBaseConfiguration={
+                "type": "VECTOR",
+                "vectorKnowledgeBaseConfiguration": {
+                    "embeddingModelArn": f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2:0",
+                    "embeddingModelConfiguration": {"bedrockEmbeddingModelConfiguration": {"dimensions": 1024}},
+                },
+            },
+            storageConfiguration={
+                "type": "OPENSEARCH_SERVERLESS",
+                "opensearchServerlessConfiguration": {
+                    "collectionArn": opensearch_info["arn"],
+                    "fieldMapping": {"metadataField": "AMAZON_BEDROCK_METADATA", "textField": "AMAZON_BEDROCK_TEXT", "vectorField": "vector_field"},
+                    "vectorIndexName": self.project,
+                },
+            },
+        )
+        kb_id = resp["knowledgeBase"]["knowledgeBaseId"]
+        logger.info("  Knowledge Base 생성: %s (ACTIVE 대기중...)", kb_id)
+        while True:
+            status = self.bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]["status"]
+            if status == "ACTIVE":
+                break
+            if status == "FAILED":
+                raise RuntimeError("Knowledge Base 생성 실패")
+            time.sleep(10)
+
+        self.bedrock_agent.create_data_source(
+            knowledgeBaseId=kb_id,
+            name=s3_bucket_name,
+            description=f"S3 data source: {s3_bucket_name}",
+            dataDeletionPolicy="RETAIN",
+            dataSourceConfiguration={
+                "type": "S3",
+                "s3Configuration": {"bucketArn": f"arn:aws:s3:::{s3_bucket_name}", "inclusionPrefixes": ["docs/"]},
+            },
+            vectorIngestionConfiguration={
+                "chunkingConfiguration": {
+                    "chunkingStrategy": "HIERARCHICAL",
+                    "hierarchicalChunkingConfiguration": {"levelConfigurations": [{"maxTokens": 1500}, {"maxTokens": 300}], "overlapTokens": 60},
+                },
+                "parsingConfiguration": {
+                    "parsingStrategy": "BEDROCK_FOUNDATION_MODEL",
+                    "bedrockFoundationModelConfiguration": {"modelArn": f"arn:aws:bedrock:{self.region}:{self.account_id}:inference-profile/global.anthropic.claude-sonnet-4-5-20250929-v1:0"},
+                },
+            },
+        )
+        logger.info("  Data Source 생성 완료 (docs/ prefix)")
+        return kb_id
+
+    # ==================================================================
     # VPC Endpoint
     # ==================================================================
     def _ensure_bedrock_endpoint(self, vpc_id: str, private_subnets: List[str], sg_id: str) -> str:
@@ -751,6 +1136,29 @@ class Installer:
         logger.info("  VPC Endpoint 생성: %s", eid)
         return eid
 
+    def _ensure_vpc_endpoint(
+        self, vpc_id: str, private_subnets: List[str], sg_id: str, service_name: str
+    ) -> str:
+        """VPC Endpoint 생성 또는 재사용."""
+        eps = self.ec2.describe_vpc_endpoints(
+            Filters=[
+                {"Name": "vpc-id", "Values": [vpc_id]},
+                {"Name": "service-name", "Values": [service_name]},
+            ]
+        )["VpcEndpoints"]
+        if eps:
+            eid = eps[0]["VpcEndpointId"]
+            logger.info("  VPC Endpoint 재사용: %s (%s)", eid, service_name.split(".")[-1])
+            return eid
+        resp = self.ec2.create_vpc_endpoint(
+            VpcId=vpc_id, ServiceName=service_name, VpcEndpointType="Interface",
+            SubnetIds=private_subnets, SecurityGroupIds=[sg_id],
+            PrivateDnsEnabled=True,
+        )
+        eid = resp["VpcEndpoint"]["VpcEndpointId"]
+        logger.info("  VPC Endpoint 생성: %s (%s)", eid, service_name.split(".")[-1])
+        return eid
+
     # ==================================================================
     # UserData
     # ==================================================================
@@ -763,12 +1171,15 @@ class Installer:
         telegram_allow_from: List[str],
         telegram_stream_mode: str,
         config_path: Path,
+        knowledge_base_id: Optional[str] = None,
+        skills_s3_uri: Optional[str] = None,
     ) -> str:
         config = self._build_openclaw_config(
             gateway_token, vpc_cidr,
             telegram_bot_token, telegram_dm_policy,
             telegram_allow_from, telegram_stream_mode,
             config_path,
+            knowledge_base_id=knowledge_base_id,
         )
         config_json = json.dumps(config, ensure_ascii=False, indent=2)
 
@@ -787,7 +1198,7 @@ class Installer:
             "timedatectl set-timezone Asia/Seoul || true",
             "npm install -g openclaw@latest",
             "",
-            "mkdir -p /home/ec2-user/.openclaw /home/ec2-user/clawd",
+            "mkdir -p /home/ec2-user/.openclaw /home/ec2-user/clawd /home/ec2-user/.openclaw/workspace/skills",
             "cat > /home/ec2-user/.openclaw/openclaw.json <<'OCJSON'",
             config_json,
             "OCJSON",
@@ -795,6 +1206,14 @@ class Installer:
             f'echo "{gateway_token}" > /home/ec2-user/openclaw-token.txt',
             "chown -R ec2-user:ec2-user /home/ec2-user/.openclaw /home/ec2-user/clawd /home/ec2-user/openclaw-token.txt",
             "",
+        ]
+        if skills_s3_uri:
+            lines.extend([
+                f'aws s3 cp "{skills_s3_uri}" /home/ec2-user/.openclaw/workspace/skills/ --recursive',
+                "chown -R ec2-user:ec2-user /home/ec2-user/.openclaw/workspace/skills",
+                "",
+            ])
+        lines.extend([
             "cat > /etc/systemd/system/openclaw-gateway.service <<'SVC'",
             "[Unit]",
             "Description=OpenClaw Gateway Service",
@@ -823,7 +1242,7 @@ class Installer:
             "systemctl start openclaw-gateway.service",
             "",
             'echo "=== OpenClaw install done ==="',
-        ]
+        ])
         return "\n".join(lines) + "\n"
 
     def _build_openclaw_config(
@@ -835,6 +1254,7 @@ class Installer:
         telegram_allow_from: List[str],
         telegram_stream_mode: str,
         config_path: Path,
+        knowledge_base_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if config_path.exists():
             config = json.loads(config_path.read_text("utf-8"))
@@ -902,6 +1322,8 @@ class Installer:
 
         ag = config.setdefault("agents", {}).setdefault("defaults", {})
         ag["workspace"] = "/home/ec2-user/clawd"
+        # knowledgeBaseId는 OpenClaw가 agents.defaults에서 지원하지 않음 (Config invalid 오류)
+        # Knowledge Base ID는 deployment-info.md에 기록되며, skill 등으로 별도 설정 필요
         if "model" not in ag:
             ag["model"] = {
                 "primary": "amazon-bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0"
@@ -917,7 +1339,8 @@ class Installer:
         tg["botToken"] = telegram_bot_token
         tg["dmPolicy"] = telegram_dm_policy
         tg["allowFrom"] = telegram_allow_from
-        tg["streamMode"] = telegram_stream_mode
+        # OpenClaw 최신 버전: streamMode → streaming
+        tg["streaming"] = telegram_stream_mode
 
         config.get("channels", {}).pop("whatsapp", None)
 
@@ -1194,6 +1617,9 @@ class Installer:
             | IAM Role | {o["iam_role"]} |
             | Instance Profile | {o["instance_profile"]} |
             | CloudFront | {o.get("cloudfront_id") or "N/A"} ({o.get("cloudfront_domain") or "N/A"}) |
+            | S3 Bucket (KB) | {o.get("s3_bucket") or "N/A"} |
+            | Knowledge Base ID | {o.get("knowledge_base_id") or "N/A"} |
+            | OpenSearch Endpoint | {o.get("opensearch_endpoint") or "N/A"} |
 
             ## 접속 URL
             - CloudFront (HTTPS): {cf_url}
@@ -1232,6 +1658,14 @@ class Installer:
             sudo journalctl -u openclaw-gateway.service -f
             ```
         """)
+        if o.get("knowledge_base_id") and o.get("s3_bucket"):
+            md += textwrap.dedent(f"""
+
+            ## Knowledge Base 사용법
+            - S3 버킷 `{o["s3_bucket"]}` 의 `docs/` 폴더에 문서 업로드
+            - `aws s3 cp your-docs/ s3://{o["s3_bucket"]}/docs/ --recursive`
+            - Bedrock Console → Knowledge Bases → Data source Sync 실행
+            """)
         path.write_text(md, encoding="utf-8")
         logger.info("  %s 생성 완료", path)
 
@@ -1335,13 +1769,15 @@ def main() -> None:
     parser.add_argument("--config-path", default=str(CONFIG_PATH), help="openclaw-config.json 경로")
     parser.add_argument("--deployment-info-path", default=str(DEPLOYMENT_INFO_PATH))
     parser.add_argument("--disable-cloudfront", action="store_true")
+    parser.add_argument("--disable-knowledge-base", action="store_true", help="Knowledge Base 비활성화")
 
     args = parser.parse_args()
 
     # ---- 시작 배너 ----
     installer = Installer(region=args.region, project=args.project_name)
 
-    total_steps = 10 if not args.disable_cloudfront else 9
+    kb_steps = 0 if args.disable_knowledge_base else 5
+    total_steps = (10 if not args.disable_cloudfront else 9) + kb_steps
 
     logger.info("")
     logger.info("%s", "=" * 60)
@@ -1353,20 +1789,27 @@ def main() -> None:
     logger.info("            Bedrock API는 VPC Endpoint(PrivateLink) 사용")
     logger.info("")
     logger.info("  진행 순서 (총 %d단계):", total_steps)
-    logger.info("    1) VPC / Subnet / IGW / NAT Gateway 생성")
-    logger.info("    2) IAM Role + Instance Profile 생성")
-    logger.info("    3) Security Groups 생성 (EC2, ALB)")
-    logger.info("    4) Bedrock Runtime VPC Endpoint 생성")
-    logger.info("    5) EC2 UserData 렌더링 (OpenClaw 설정)")
-    logger.info("    6) EC2 인스턴스 생성 (Private Subnet)")
-    logger.info("    7) ALB + Target Group + Listener 생성")
+    step_num = 1
+    logger.info("    %d) VPC / Subnet / IGW / NAT Gateway 생성", step_num); step_num += 1
+    if not args.disable_knowledge_base:
+        logger.info("    %d) S3 Bucket 생성 (Knowledge Base용)", step_num); step_num += 1
+        if SKILLS_PATH.exists() and SKILLS_PATH.is_dir():
+            logger.info("    %d) Skills 폴더 S3 업로드", step_num); step_num += 1
+        logger.info("    %d) Knowledge Base IAM Role 생성", step_num); step_num += 1
+    logger.info("    %d) IAM Role + Instance Profile 생성", step_num); step_num += 1
+    logger.info("    %d) Security Groups 생성 (EC2, ALB)", step_num); step_num += 1
+    logger.info("    %d) Bedrock Runtime VPC Endpoint 생성", step_num); step_num += 1
+    if not args.disable_knowledge_base:
+        logger.info("    %d) OpenSearch Serverless Collection 생성", step_num); step_num += 1
+        logger.info("    %d) OpenSearch Vector Index 생성", step_num); step_num += 1
+        logger.info("    %d) Knowledge Base 생성", step_num); step_num += 1
+    logger.info("    %d) EC2 UserData 렌더링 (OpenClaw 설정)", step_num); step_num += 1
+    logger.info("    %d) EC2 인스턴스 생성 (Private Subnet)", step_num); step_num += 1
+    logger.info("    %d) ALB + Target Group + Listener 생성", step_num); step_num += 1
     if not args.disable_cloudfront:
-        logger.info("    8) CloudFront Distribution 생성")
-        logger.info("    9) deployment-info.md 생성")
-        logger.info("   10) 엔드포인트 접속 확인")
-    else:
-        logger.info("    8) deployment-info.md 생성")
-        logger.info("    9) 엔드포인트 접속 확인")
+        logger.info("    %d) CloudFront Distribution 생성", step_num); step_num += 1
+    logger.info("    %d) deployment-info.md 생성", step_num); step_num += 1
+    logger.info("    %d) 엔드포인트 접속 확인", step_num)
     logger.info("")
     logger.info("  설정:")
     logger.info("    Project      : %s", args.project_name)
@@ -1378,6 +1821,10 @@ def main() -> None:
     logger.info(
         "    CloudFront   : %s",
         "enabled" if not args.disable_cloudfront else "disabled",
+    )
+    logger.info(
+        "    Knowledge Base: %s",
+        "disabled" if args.disable_knowledge_base else "enabled (S3/OpenSearch/KB)",
     )
     logger.info("    Telegram     : policy=%s", args.telegram_dm_policy)
     logger.info("    Key Pair     : %s", args.key_name or "(없음 - SSM 접속 전용)")
@@ -1418,6 +1865,7 @@ def main() -> None:
             ami_id=args.ami_id,
             volume_size=args.volume_size,
             enable_cloudfront=not args.disable_cloudfront,
+            enable_knowledge_base=not args.disable_knowledge_base,
             config_path=Path(args.config_path),
             deployment_info_path=Path(args.deployment_info_path),
         )
@@ -1462,6 +1910,9 @@ def main() -> None:
         logger.info("    CloudFront       : https://%s", cf_domain)
     logger.info("    NAT Gateway      : %s", outputs.get("nat_gateway_id") or "N/A")
     logger.info("    Bedrock Endpoint : %s", outputs["vpce_id"])
+    if outputs.get("knowledge_base_id"):
+        logger.info("    S3 Bucket (KB)   : %s", outputs.get("s3_bucket") or "N/A")
+        logger.info("    Knowledge Base  : %s", outputs["knowledge_base_id"])
     logger.info("")
     logger.info("  Total deployment time: %.2f minutes", elapsed / 60)
     logger.info("")

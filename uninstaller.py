@@ -19,7 +19,7 @@ import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
 
-PROJECT_NAME = "openclaw"
+PROJECT_NAME = "openclaw2"
 REGION = "us-west-2"
 
 logging.basicConfig(
