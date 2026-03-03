@@ -19,7 +19,7 @@ import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 
 
-PROJECT_NAME = "openclaw2"
+PROJECT_NAME = "openclaw"
 REGION = "us-west-2"
 
 logging.basicConfig(
@@ -40,6 +40,9 @@ class Uninstaller:
         self.cf = self.session.client("cloudfront")
         self.iam = self.session.client("iam")
         self.sts = self.session.client("sts")
+        self.s3 = self.session.client("s3")
+        self.opensearch = self.session.client("opensearchserverless")
+        self.bedrock_agent = self.session.client("bedrock-agent")
         self._step = 0
 
         try:
@@ -67,8 +70,10 @@ class Uninstaller:
         self.delete_cloudfront()
         self.delete_alb_and_target_group()
         self.terminate_ec2_instances()
+        self.delete_knowledge_base_resources()
         self.delete_vpcs_and_networking()
         self.delete_iam()
+        self.delete_knowledge_base_iam_role()
         self.delete_cloudfront_retry()
 
         elapsed = (time.time() - start) / 60
@@ -218,6 +223,146 @@ class Uninstaller:
         waiter = self.ec2.get_waiter("instance_terminated")
         waiter.wait(InstanceIds=instance_ids)
         logger.info("  EC2 종료 완료")
+
+    # ------------------------------------------------------------------
+    # Knowledge Base (KB, OpenSearch, S3)
+    # ------------------------------------------------------------------
+    def delete_knowledge_base_resources(self) -> None:
+        self._next_step("Knowledge Base / OpenSearch / S3 삭제")
+
+        # 1) Knowledge Base 삭제 (Data Source 포함)
+        kb_ids_to_wait: List[str] = []
+        try:
+            for kb in self.bedrock_agent.list_knowledge_bases().get("knowledgeBaseSummaries", []):
+                if kb.get("name") == self.project:
+                    kb_id = kb["knowledgeBaseId"]
+                    try:
+                        self.bedrock_agent.delete_knowledge_base(knowledgeBaseId=kb_id)
+                        logger.info("  Knowledge Base 삭제 요청: %s", kb_id)
+                        kb_ids_to_wait.append(kb_id)
+                    except ClientError as exc:
+                        if exc.response["Error"]["Code"] != "ResourceNotFoundException":
+                            logger.warning("  Knowledge Base 삭제 경고: %s", exc)
+        except ClientError as exc:
+            logger.warning("  Knowledge Base 조회/삭제 경고: %s", exc)
+
+        self._wait_for_knowledge_bases_deleted(kb_ids_to_wait)
+
+        # 2) OpenSearch Serverless Collection 삭제
+        collection_name = self.project
+        try:
+            collections = self.opensearch.list_collections().get("collectionSummaries", [])
+            for c in collections:
+                if c.get("name") == collection_name:
+                    try:
+                        self.opensearch.delete_collection(id=c["id"])
+                        logger.info("  OpenSearch Collection 삭제 요청: %s", collection_name)
+                    except ClientError as exc:
+                        if exc.response["Error"]["Code"] not in ("ResourceNotFoundException", "ConflictException"):
+                            logger.warning("  OpenSearch Collection 삭제 경고: %s", exc)
+                    break
+        except ClientError as exc:
+            logger.warning("  OpenSearch 조회/삭제 경고: %s", exc)
+
+        # OpenSearch Collection 삭제는 비동기이므로 대기
+        self._wait_for_opensearch_collection_deleted(collection_name)
+
+        # 3) OpenSearch Access/Security Policy 삭제
+        data_name = f"data-{self.project}"
+        net_name = f"net-{self.project}-{self.region}"
+        enc_name = f"enc-{self.project}-{self.region}"
+
+        try:
+            self.opensearch.delete_access_policy(name=data_name, type="data")
+            logger.info("  OpenSearch Data Access Policy 삭제: %s", data_name)
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code not in ("ResourceNotFoundException", "ConflictException"):
+                logger.warning("  OpenSearch Data Access Policy 삭제 경고(%s): %s", data_name, exc)
+
+        for policy_name, policy_type in [
+            (net_name, "network"),
+            (enc_name, "encryption"),
+        ]:
+            try:
+                self.opensearch.delete_security_policy(name=policy_name, type=policy_type)
+                logger.info("  OpenSearch Security Policy 삭제: %s (%s)", policy_name, policy_type)
+            except ClientError as exc:
+                code = exc.response["Error"]["Code"]
+                if code not in ("ResourceNotFoundException", "ConflictException"):
+                    logger.warning("  OpenSearch Security Policy 삭제 경고(%s): %s", policy_name, exc)
+
+        # 4) S3 Bucket 비우기 및 삭제
+        bucket_name = f"storage-for-{self.project}-{self.account_id}-{self.region}"
+        try:
+            paginator = self.s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket_name):
+                objects = page.get("Contents", [])
+                if objects:
+                    delete_keys = [{"Key": obj["Key"]} for obj in objects]
+                    self.s3.delete_objects(Bucket=bucket_name, Delete={"Objects": delete_keys})
+                    logger.info("  S3 객체 삭제: %d개", len(delete_keys))
+            self.s3.delete_bucket(Bucket=bucket_name)
+            logger.info("  S3 Bucket 삭제: %s", bucket_name)
+        except ClientError as exc:
+            code = exc.response["Error"]["Code"]
+            if code != "NoSuchBucket":
+                logger.warning("  S3 Bucket 삭제 경고: %s", exc)
+            else:
+                logger.info("  S3 Bucket 없음: %s", bucket_name)
+
+    def _wait_for_knowledge_bases_deleted(self, kb_ids: List[str], timeout_sec: int = 300) -> None:
+        for kb_id in kb_ids:
+            waited = 0
+            while waited < timeout_sec:
+                try:
+                    status = self.bedrock_agent.get_knowledge_base(knowledgeBaseId=kb_id)["knowledgeBase"]["status"]
+                    if status in ("DELETED", "DELETE_UNSUCCESSFUL"):
+                        break
+                except ClientError as exc:
+                    if exc.response["Error"]["Code"] == "ResourceNotFoundException":
+                        break  # 삭제 완료
+                    raise
+                time.sleep(10)
+                waited += 10
+            else:
+                logger.warning("  Knowledge Base 삭제 대기 타임아웃: %s", kb_id)
+
+    def _wait_for_opensearch_collection_deleted(self, collection_name: str, timeout_sec: int = 600) -> None:
+        waited = 0
+        while waited < timeout_sec:
+            try:
+                collections = self.opensearch.list_collections().get("collectionSummaries", [])
+                found = any(c.get("name") == collection_name for c in collections)
+                if not found:
+                    return
+            except ClientError:
+                return
+            time.sleep(15)
+            waited += 15
+        logger.warning("  OpenSearch Collection 삭제 대기 타임아웃: %s", collection_name)
+
+    def delete_knowledge_base_iam_role(self) -> None:
+        self._next_step("Knowledge Base IAM Role 삭제")
+        role_name = f"role-knowledge-base-for-{self.project}-{self.region}"
+        try:
+            attached = self.iam.list_attached_role_policies(RoleName=role_name).get("AttachedPolicies", [])
+            for p in attached:
+                try:
+                    self.iam.detach_role_policy(RoleName=role_name, PolicyArn=p["PolicyArn"])
+                except ClientError:
+                    pass
+            inline = self.iam.list_role_policies(RoleName=role_name).get("PolicyNames", [])
+            for p_name in inline:
+                try:
+                    self.iam.delete_role_policy(RoleName=role_name, PolicyName=p_name)
+                except ClientError:
+                    pass
+            self.iam.delete_role(RoleName=role_name)
+            logger.info("  Knowledge Base IAM Role 삭제: %s", role_name)
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] != "NoSuchEntity":
+                logger.warning("  Knowledge Base IAM Role 삭제 경고: %s", exc)
 
     # ------------------------------------------------------------------
     # VPC / Network
@@ -393,7 +538,7 @@ class Uninstaller:
         waited = 0
         while waited < timeout_sec:
             nats = self.ec2.describe_nat_gateways(
-                Filter=[{"Name": "vpc-id", "Values": [vpc_id]}]
+                Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]
             ).get("NatGateways", [])
             alive = [n["NatGatewayId"] for n in nats if n.get("State") not in ("deleted", "failed")]
             if not alive:
