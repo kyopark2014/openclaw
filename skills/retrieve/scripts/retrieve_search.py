@@ -69,7 +69,7 @@ def get_sharing_url_from_cloudfront(project_name: str) -> str:
                     return f"https://{domain}"
     raise ValueError(f'CloudFront distribution with Comment "{target_comment}" not found')
 
-project_name = "openclaw2"
+project_name = "openclaw"
 knowledge_base_name = project_name
 knowledge_base_id = ""
 region = "us-west-2"
