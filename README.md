@@ -377,6 +377,15 @@ gog auth list
 EC2와 같이 브라우저가 없는 경우에 dashboard에 접속해서 chat에서 "gmail을 등록해주세요"라고 입력후 주어진 가이드에 따라 수행합니다. "gog auth add"를 수행시 localhost로 수행되는 url을 받아서 client에서 수행하여야 하므로 dashboard의 chat에서 수행하여야 합니다.
 
 
+### 인프라 삭제
+
+OpenClaw를 위해 설치한 인프라가 더이상 필요하지 않은 경우에는 아래 명령어를 이용해 삭제합니다.
+
+```text
+python uninstaller.py
+```
+
+
 ## Reference
 
 [OpenClaw — Personal AI Assistant](https://github.com/openclaw/openclaw)
