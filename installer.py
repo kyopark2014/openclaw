@@ -323,7 +323,10 @@ class Installer:
         cf_id, cf_domain = None, None
         if enable_cloudfront:
             _step("CloudFront Distribution")
-            cf_id, cf_domain = self._create_cloudfront(alb_dns)
+            cf_id, cf_domain = self._create_cloudfront(
+                alb_dns,
+                s3_bucket_name=s3_bucket_name if enable_knowledge_base else None,
+            )
 
         _step("deployment-info.md 생성")
         self.out = {
@@ -1531,15 +1534,87 @@ class Installer:
                     return item["Id"], item["DomainName"]
         return None
 
-    def _create_cloudfront(self, alb_dns: str) -> tuple[str, str]:
+    def _create_cloudfront(
+        self,
+        alb_dns: str,
+        s3_bucket_name: Optional[str] = None,
+    ) -> tuple[str, str]:
         existing = self._find_existing_cloudfront()
         if existing:
             did, dom = existing
             logger.info("  기존 CloudFront 발견: %s (%s)", dom, did)
+            if s3_bucket_name:
+                self._ensure_cloudfront_s3_origin(did, s3_bucket_name)
             return did, dom
 
         caller_ref = f"{self.project}-{int(time.time())}"
-        origin_id = "openclaw-alb-origin"
+        origin_id_alb = "openclaw-alb-origin"
+        origin_items: List[Dict[str, Any]] = [
+            {
+                "Id": origin_id_alb,
+                "DomainName": alb_dns,
+                "CustomOriginConfig": {
+                    "HTTPPort": 80,
+                    "HTTPSPort": 443,
+                    "OriginProtocolPolicy": "http-only",
+                    "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
+                },
+            },
+        ]
+
+        cache_behaviors: Dict[str, Any] = {"Quantity": 0, "Items": []}
+        oac_id: Optional[str] = None
+
+        if s3_bucket_name:
+            oac_id = self._create_cloudfront_oac()
+            s3_domain = (
+                f"{s3_bucket_name}.s3.amazonaws.com"
+                if self.region == "us-east-1"
+                else f"{s3_bucket_name}.s3.{self.region}.amazonaws.com"
+            )
+            origin_id_s3 = "openclaw-s3-docs-origin"
+            origin_items.append({
+                "Id": origin_id_s3,
+                "DomainName": s3_domain,
+                "OriginPath": "",
+                "CustomHeaders": {"Quantity": 0},
+                "OriginAccessControlId": oac_id,
+                "S3OriginConfig": {"OriginAccessIdentity": ""},
+                "ConnectionAttempts": 3,
+                "ConnectionTimeout": 10,
+                "OriginShield": {"Enabled": False},
+            })
+            cache_behaviors = {
+                "Quantity": 1,
+                "Items": [{
+                    "PathPattern": "/docs/*",
+                    "TargetOriginId": origin_id_s3,
+                    "TrustedSigners": {"Enabled": False, "Quantity": 0},
+                    "TrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                    "ViewerProtocolPolicy": "redirect-to-https",
+                    "AllowedMethods": {
+                        "Quantity": 2,
+                        "Items": ["GET", "HEAD"],
+                        "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+                    },
+                    "SmoothStreaming": False,
+                    "Compress": True,
+                    "LambdaFunctionAssociations": {"Quantity": 0},
+                    "FunctionAssociations": {"Quantity": 0},
+                    "FieldLevelEncryptionId": "",
+                    "ForwardedValues": {
+                        "QueryString": False,
+                        "Cookies": {"Forward": "none"},
+                        "Headers": {"Quantity": 0},
+                        "QueryStringCacheKeys": {"Quantity": 0},
+                    },
+                    "MinTTL": 0,
+                    "DefaultTTL": 86400,
+                    "MaxTTL": 31536000,
+                }],
+            }
+            logger.info("  S3 Origin 추가: /docs/* → s3://%s/docs/", s3_bucket_name)
+
         dist = self.cf.create_distribution(DistributionConfig={
             "CallerReference": caller_ref,
             "Comment": f"{self.project} CloudFront",
@@ -1547,20 +1622,11 @@ class Installer:
             "HttpVersion": "http2",
             "PriceClass": "PriceClass_All",
             "Origins": {
-                "Quantity": 1,
-                "Items": [{
-                    "Id": origin_id,
-                    "DomainName": alb_dns,
-                    "CustomOriginConfig": {
-                        "HTTPPort": 80,
-                        "HTTPSPort": 443,
-                        "OriginProtocolPolicy": "http-only",
-                        "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
-                    },
-                }],
+                "Quantity": len(origin_items),
+                "Items": origin_items,
             },
             "DefaultCacheBehavior": {
-                "TargetOriginId": origin_id,
+                "TargetOriginId": origin_id_alb,
                 "ViewerProtocolPolicy": "redirect-to-https",
                 "AllowedMethods": {
                     "Quantity": 7,
@@ -1577,12 +1643,160 @@ class Installer:
                 "DefaultTTL": 0,
                 "MaxTTL": 0,
             },
+            "CacheBehaviors": cache_behaviors,
             "ViewerCertificate": {"CloudFrontDefaultCertificate": True},
         })["Distribution"]
         did = dist["Id"]
         dom = dist["DomainName"]
         logger.info("  CloudFront 생성: %s (%s)", dom, did)
+
+        if s3_bucket_name:
+            self._add_cloudfront_s3_bucket_policy(
+                s3_bucket_name,
+                f"arn:aws:cloudfront::{self.account_id}:distribution/{did}",
+            )
+            self._invalidate_cloudfront_cache(did, ["/docs/*"])
+
         return did, dom
+
+    def _invalidate_cloudfront_cache(self, dist_id: str, paths: List[str]) -> None:
+        """CloudFront 캐시 무효화 (기존 ALB 응답 캐시 제거)."""
+        try:
+            self.cf.create_invalidation(
+                DistributionId=dist_id,
+                InvalidationBatch={
+                    "Paths": {"Quantity": len(paths), "Items": paths},
+                    "CallerReference": f"{self.project}-{int(time.time())}",
+                },
+            )
+            logger.info("  CloudFront 캐시 무효화: %s", paths)
+        except ClientError as exc:
+            logger.warning("  CloudFront 캐시 무효화 경고: %s", exc)
+
+    def _create_cloudfront_oac(self) -> str:
+        """CloudFront S3 Origin용 OAC 생성."""
+        oac_name = f"oac-{self.project}-s3-docs"
+        try:
+            existing = self.cf.list_origin_access_controls().get("OriginAccessControlList", {})
+            for item in existing.get("Items", []):
+                if item.get("Name") == oac_name:
+                    return item["Id"]
+        except ClientError:
+            pass
+
+        resp = self.cf.create_origin_access_control(OriginAccessControlConfig={
+            "Name": oac_name,
+            "Description": f"OAC for {self.project} S3 docs",
+            "SigningProtocol": "sigv4",
+            "SigningBehavior": "always",
+            "OriginAccessControlOriginType": "s3",
+        })
+        oac_id = resp["OriginAccessControl"]["Id"]
+        logger.info("  CloudFront OAC 생성: %s", oac_id)
+        return oac_id
+
+    def _ensure_cloudfront_s3_origin(self, dist_id: str, s3_bucket_name: str) -> None:
+        """기존 CloudFront 배포에 S3 Origin 및 /docs/* Cache Behavior 추가."""
+        try:
+            resp = self.cf.get_distribution_config(Id=dist_id)
+            cfg = resp["DistributionConfig"]
+            etag = resp["ETag"]
+
+            origin_id_s3 = "openclaw-s3-docs-origin"
+            existing_origins = {o["Id"] for o in cfg["Origins"]["Items"]}
+            if origin_id_s3 in existing_origins:
+                logger.info("  CloudFront에 이미 S3 Origin 존재")
+                self._invalidate_cloudfront_cache(dist_id, ["/docs/*"])
+                return
+
+            oac_id = self._create_cloudfront_oac()
+            s3_domain = (
+                f"{s3_bucket_name}.s3.amazonaws.com"
+                if self.region == "us-east-1"
+                else f"{s3_bucket_name}.s3.{self.region}.amazonaws.com"
+            )
+            cfg["Origins"]["Items"].append({
+                "Id": origin_id_s3,
+                "DomainName": s3_domain,
+                "OriginPath": "",
+                "CustomHeaders": {"Quantity": 0},
+                "OriginAccessControlId": oac_id,
+                "S3OriginConfig": {"OriginAccessIdentity": ""},
+                "ConnectionAttempts": 3,
+                "ConnectionTimeout": 10,
+                "OriginShield": {"Enabled": False},
+            })
+            cfg["Origins"]["Quantity"] = len(cfg["Origins"]["Items"])
+
+            docs_behavior = {
+                "PathPattern": "/docs/*",
+                "TargetOriginId": origin_id_s3,
+                "TrustedSigners": {"Enabled": False, "Quantity": 0},
+                "TrustedKeyGroups": {"Enabled": False, "Quantity": 0},
+                "ViewerProtocolPolicy": "redirect-to-https",
+                "AllowedMethods": {
+                    "Quantity": 2,
+                    "Items": ["GET", "HEAD"],
+                    "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
+                },
+                "SmoothStreaming": False,
+                "Compress": True,
+                "LambdaFunctionAssociations": {"Quantity": 0},
+                "FunctionAssociations": {"Quantity": 0},
+                "FieldLevelEncryptionId": "",
+                "ForwardedValues": {
+                    "QueryString": False,
+                    "Cookies": {"Forward": "none"},
+                    "Headers": {"Quantity": 0},
+                    "QueryStringCacheKeys": {"Quantity": 0},
+                },
+                "MinTTL": 0,
+                "DefaultTTL": 86400,
+                "MaxTTL": 31536000,
+            }
+            existing_behaviors = cfg["CacheBehaviors"].get("Items", [])
+            if not any(b.get("PathPattern") == "/docs/*" for b in existing_behaviors):
+                existing_behaviors.append(docs_behavior)
+                cfg["CacheBehaviors"]["Items"] = existing_behaviors
+                cfg["CacheBehaviors"]["Quantity"] = len(existing_behaviors)
+
+            # S3 버킷 정책을 먼저 추가 (CloudFront가 Origin 검증 시 접근 가능해야 함)
+            dist_arn = f"arn:aws:cloudfront::{self.account_id}:distribution/{dist_id}"
+            self._add_cloudfront_s3_bucket_policy(s3_bucket_name, dist_arn)
+
+            self.cf.update_distribution(Id=dist_id, DistributionConfig=cfg, IfMatch=etag)
+            logger.info("  CloudFront 업데이트: S3 Origin /docs/* 추가")
+            self._invalidate_cloudfront_cache(dist_id, ["/docs/*"])
+        except ClientError as exc:
+            logger.warning("  CloudFront S3 Origin 추가 경고: %s", exc)
+
+    def _add_cloudfront_s3_bucket_policy(self, bucket_name: str, distribution_arn: str) -> None:
+        """S3 버킷에 CloudFront OAC 접근을 허용하는 정책 추가."""
+        cf_statement = {
+            "Sid": "AllowCloudFrontServicePrincipal",
+            "Effect": "Allow",
+            "Principal": {"Service": "cloudfront.amazonaws.com"},
+            "Action": "s3:GetObject",
+            "Resource": f"arn:aws:s3:::{bucket_name}/*",
+            "Condition": {"StringEquals": {"AWS:SourceArn": distribution_arn}},
+        }
+        try:
+            try:
+                current = self.s3.get_bucket_policy(Bucket=bucket_name)
+                policy = json.loads(current["Policy"])
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] != "NoSuchBucketPolicy":
+                    raise
+                policy = {"Version": "2012-10-17", "Statement": []}
+
+            statements = policy.get("Statement", [])
+            if not any(s.get("Sid") == "AllowCloudFrontServicePrincipal" for s in statements):
+                statements.append(cf_statement)
+                policy["Statement"] = statements
+                self.s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(policy))
+                logger.info("  S3 버킷 정책 업데이트: CloudFront OAC 허용")
+        except ClientError as exc:
+            logger.warning("  S3 버킷 정책 업데이트 경고: %s", exc)
 
     # ==================================================================
     # Deployment Info
@@ -1659,12 +1873,23 @@ class Installer:
             ```
         """)
         if o.get("knowledge_base_id") and o.get("s3_bucket"):
+            docs_url = f"https://{o['cloudfront_domain']}/docs/" if o.get("cloudfront_domain") else "(CloudFront 비활성)"
             md += textwrap.dedent(f"""
 
             ## Knowledge Base 사용법
             - S3 버킷 `{o["s3_bucket"]}` 의 `docs/` 폴더에 문서 업로드
             - `aws s3 cp your-docs/ s3://{o["s3_bucket"]}/docs/ --recursive`
             - Bedrock Console → Knowledge Bases → Data source Sync 실행
+            - **문서 공개 URL**: {docs_url} (CloudFront를 통해 S3 docs/ 제공)
+            """)
+            if o.get("cloudfront_id"):
+                md += textwrap.dedent(f"""
+
+            ## /docs/ 접속 실패 시 (캐시 무효화)
+            문서 URL이 HTML(OpenClaw UI)을 반환하면 CloudFront 캐시 문제입니다. 캐시 무효화:
+            ```bash
+            aws cloudfront create-invalidation --distribution-id {o["cloudfront_id"]} --paths "/docs/*" --region {o["region"]}
+            ```
             """)
         path.write_text(md, encoding="utf-8")
         logger.info("  %s 생성 완료", path)
@@ -1738,6 +1963,49 @@ def check_application_ready(
 
 
 # ===================================================================
+# Fix CloudFront docs (S3 Origin)
+# ===================================================================
+
+def _run_fix_cloudfront_docs(
+    region: str,
+    project: str,
+    deployment_info_path: Path,
+) -> None:
+    """기존 CloudFront에 S3 Origin 및 /docs/* Cache Behavior 추가."""
+    import re
+
+    installer = Installer(region=region, project=project)
+    dist_id = None
+    s3_bucket = None
+
+    if deployment_info_path.exists():
+        text = deployment_info_path.read_text("utf-8")
+        m = re.search(r"\| CloudFront \| ([A-Z0-9]+) ", text)
+        if m:
+            dist_id = m.group(1)
+        m = re.search(r"\| S3 Bucket \(KB\) \| ([^|]+) \|", text)
+        if m:
+            s3_bucket = m.group(1).strip()
+        m = re.search(r"storage-for-[^\s|]+", text)
+        if m and not s3_bucket:
+            s3_bucket = m.group(0).strip()
+
+    if not dist_id:
+        existing = installer._find_existing_cloudfront()
+        if existing:
+            dist_id = existing[0]
+    if not dist_id:
+        logger.error("CloudFront Distribution ID를 찾을 수 없습니다. deployment-info.md를 확인하세요.")
+        sys.exit(1)
+
+    if not s3_bucket:
+        s3_bucket = f"storage-for-{project}-{installer.account_id}-{region}"
+    logger.info("CloudFront S3 Origin 추가: dist=%s, bucket=%s", dist_id, s3_bucket)
+    installer._ensure_cloudfront_s3_origin(dist_id, s3_bucket)
+    logger.info("완료. CloudFront 배포 반영까지 5-10분 소요될 수 있습니다.")
+
+
+# ===================================================================
 # CLI
 # ===================================================================
 
@@ -1770,8 +2038,22 @@ def main() -> None:
     parser.add_argument("--deployment-info-path", default=str(DEPLOYMENT_INFO_PATH))
     parser.add_argument("--disable-cloudfront", action="store_true")
     parser.add_argument("--disable-knowledge-base", action="store_true", help="Knowledge Base 비활성화")
+    parser.add_argument(
+        "--fix-cloudfront-docs",
+        action="store_true",
+        help="기존 CloudFront에 S3 /docs/* Origin 추가 (배포 후 /docs/ 접속 실패 시 사용)",
+    )
 
     args = parser.parse_args()
+
+    # ---- fix-cloudfront-docs 전용 모드 ----
+    if args.fix_cloudfront_docs:
+        _run_fix_cloudfront_docs(
+            region=args.region,
+            project=args.project_name,
+            deployment_info_path=Path(args.deployment_info_path),
+        )
+        return
 
     # ---- 시작 배너 ----
     installer = Installer(region=args.region, project=args.project_name)
