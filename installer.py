@@ -38,6 +38,7 @@ VOLUME_SIZE = 50
 CONFIG_PATH = Path("openclaw-config.json")
 DEPLOYMENT_INFO_PATH = Path("assets/deployment-info.md")
 SKILLS_PATH = Path(__file__).resolve().parent / "skills"
+CUSTOM_HEADER_NAME = "X-Origin-Verify"  # CloudFront → ALB 요청 검증용 (직접 ALB 접근 차단)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -321,11 +322,18 @@ class Installer:
         )
 
         _step("ALB + Target Group + Listener")
+        # 기존 CloudFront가 있으면 해당 헤더 값 사용 (재배포 시 일치 유지)
+        origin_header_value = (
+            self._get_origin_header_from_cloudfront()
+            if enable_cloudfront
+            else None
+        ) or secrets.token_hex(16)
         alb_arn, alb_dns, tg_arn = self._create_alb(
             vpc_id=vpc_id,
             public_subnets=public_subnets,
             alb_sg=alb_sg,
             instance_id=inst_id,
+            origin_header_value=origin_header_value if enable_cloudfront else None,
         )
 
         cf_id, cf_domain = None, None
@@ -334,6 +342,7 @@ class Installer:
             cf_id, cf_domain = self._create_cloudfront(
                 alb_dns,
                 s3_bucket_name=s3_bucket_name if enable_knowledge_base else None,
+                origin_header_value=origin_header_value,
             )
 
         _step("deployment-info.md 생성")
@@ -1458,7 +1467,12 @@ class Installer:
     # ALB
     # ==================================================================
     def _create_alb(
-        self, vpc_id: str, public_subnets: List[str], alb_sg: str, instance_id: str,
+        self,
+        vpc_id: str,
+        public_subnets: List[str],
+        alb_sg: str,
+        instance_id: str,
+        origin_header_value: Optional[str] = None,
     ) -> tuple[str, str, str]:
         alb_name = f"alb-{self.project}"[:32]
         tg_name = f"tg-{self.project}"[:32]
@@ -1476,6 +1490,10 @@ class Installer:
                 if tgs:
                     tg_arn = tgs[0]["TargetGroupArn"]
                     self._ensure_target_registered(tg_arn, instance_id)
+                    if origin_header_value:
+                        self._ensure_alb_custom_header_rule(
+                            alb_arn, tg_arn, origin_header_value,
+                        )
                 else:
                     tg_arn = ""
                 return alb_arn, alb_dns, tg_arn
@@ -1511,13 +1529,98 @@ class Installer:
             TargetGroupArn=tg_arn,
             Targets=[{"Id": instance_id, "Port": GATEWAY_PORT}],
         )
-        self.elbv2.create_listener(
-            LoadBalancerArn=alb_arn,
-            Protocol="HTTP",
-            Port=80,
-            DefaultActions=[{"Type": "forward", "TargetGroupArn": tg_arn}],
-        )
+        # Custom header 사용 시: CloudFront만 ALB 통과. 기본값 403으로 직접 접근 차단
+        if origin_header_value:
+            self.elbv2.create_listener(
+                LoadBalancerArn=alb_arn,
+                Protocol="HTTP",
+                Port=80,
+                DefaultActions=[{
+                    "Type": "fixed-response",
+                    "FixedResponseConfig": {
+                        "StatusCode": "403",
+                        "ContentType": "text/plain",
+                        "MessageBody": "Access denied",
+                    },
+                }],
+            )
+            self._ensure_alb_custom_header_rule(alb_arn, tg_arn, origin_header_value)
+        else:
+            self.elbv2.create_listener(
+                LoadBalancerArn=alb_arn,
+                Protocol="HTTP",
+                Port=80,
+                DefaultActions=[{"Type": "forward", "TargetGroupArn": tg_arn}],
+            )
         return alb_arn, alb_dns, tg_arn
+
+    def _ensure_alb_custom_header_rule(
+        self, alb_arn: str, tg_arn: str, origin_header_value: str,
+    ) -> None:
+        """ALB Listener에 Custom Header 규칙 추가 (CloudFront 요청만 포워딩)."""
+        listeners = self.elbv2.describe_listeners(LoadBalancerArn=alb_arn)
+        listener_arn = None
+        for lst in listeners.get("Listeners", []):
+            if lst.get("Port") == 80 and lst.get("Protocol") == "HTTP":
+                listener_arn = lst["ListenerArn"]
+                break
+        if not listener_arn:
+            return
+
+        rules = self.elbv2.describe_rules(ListenerArn=listener_arn)
+        rule_exists = False
+        for rule in rules.get("Rules", []):
+            if rule.get("Priority") == "10":
+                for cond in rule.get("Conditions", []):
+                    if (cond.get("Field") == "http-header" and
+                        cond.get("HttpHeaderConfig", {}).get("HttpHeaderName") == CUSTOM_HEADER_NAME):
+                        rule_exists = True
+                        break
+                break
+
+        if not rule_exists:
+            try:
+                self.elbv2.create_rule(
+                    ListenerArn=listener_arn,
+                    Priority=10,
+                    Conditions=[{
+                        "Field": "http-header",
+                        "HttpHeaderConfig": {
+                            "HttpHeaderName": CUSTOM_HEADER_NAME,
+                            "Values": [origin_header_value],
+                        },
+                    }],
+                    Actions=[{"Type": "forward", "TargetGroupArn": tg_arn}],
+                )
+                logger.info("  ALB Custom Header 규칙 추가: %s", CUSTOM_HEADER_NAME)
+            except ClientError as exc:
+                if exc.response["Error"]["Code"] not in ("PriorityInUse", "RuleAlreadyExists"):
+                    raise
+
+        # 기존 default action이 forward인 경우 403으로 변경
+        listener = next(
+            (l for l in listeners.get("Listeners", [])
+             if l.get("ListenerArn") == listener_arn),
+            None,
+        )
+        if listener and listener.get("DefaultActions"):
+            default = listener["DefaultActions"][0]
+            if default.get("Type") == "forward":
+                try:
+                    self.elbv2.modify_listener(
+                        ListenerArn=listener_arn,
+                        DefaultActions=[{
+                            "Type": "fixed-response",
+                            "FixedResponseConfig": {
+                                "StatusCode": "403",
+                                "ContentType": "text/plain",
+                                "MessageBody": "Access denied",
+                            },
+                        }],
+                    )
+                    logger.info("  ALB 기본 action: 403 (직접 접근 차단)")
+                except ClientError:
+                    pass
 
     def _ensure_target_registered(self, tg_arn: str, instance_id: str) -> None:
         """Target Group에 인스턴스가 등록되어 있지 않으면 등록한다."""
@@ -1548,33 +1651,62 @@ class Installer:
                     return item["Id"], item["DomainName"]
         return None
 
+    def _get_origin_header_from_cloudfront(self) -> Optional[str]:
+        """기존 CloudFront ALB Origin의 Custom Header 값 반환 (재배포 시 일치용)."""
+        existing = self._find_existing_cloudfront()
+        if not existing:
+            return None
+        try:
+            resp = self.cf.get_distribution_config(Id=existing[0])
+            for origin in resp["DistributionConfig"]["Origins"].get("Items", []):
+                if "CustomOriginConfig" not in origin:
+                    continue
+                for h in origin.get("CustomHeaders", {}).get("Items", []):
+                    if h.get("HeaderName") == CUSTOM_HEADER_NAME:
+                        return h.get("HeaderValue")
+        except ClientError:
+            pass
+        return None
+
     def _create_cloudfront(
         self,
         alb_dns: str,
         s3_bucket_name: Optional[str] = None,
+        origin_header_value: Optional[str] = None,
     ) -> tuple[str, str]:
         existing = self._find_existing_cloudfront()
         if existing:
             did, dom = existing
             logger.info("  기존 CloudFront 발견: %s (%s)", dom, did)
+            if origin_header_value:
+                self._ensure_cloudfront_origin_header(did, origin_header_value)
             if s3_bucket_name:
                 self._ensure_cloudfront_s3_origin(did, s3_bucket_name)
             return did, dom
 
         caller_ref = f"{self.project}-{int(time.time())}"
         origin_id_alb = "openclaw-alb-origin"
-        origin_items: List[Dict[str, Any]] = [
-            {
-                "Id": origin_id_alb,
-                "DomainName": alb_dns,
-                "CustomOriginConfig": {
-                    "HTTPPort": 80,
-                    "HTTPSPort": 443,
-                    "OriginProtocolPolicy": "http-only",
-                    "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
-                },
+        alb_origin: Dict[str, Any] = {
+            "Id": origin_id_alb,
+            "DomainName": alb_dns,
+            "CustomOriginConfig": {
+                "HTTPPort": 80,
+                "HTTPSPort": 443,
+                "OriginProtocolPolicy": "http-only",
+                "OriginSslProtocols": {"Quantity": 1, "Items": ["TLSv1.2"]},
             },
-        ]
+        }
+        if origin_header_value:
+            alb_origin["CustomHeaders"] = {
+                "Quantity": 1,
+                "Items": [
+                    {
+                        "HeaderName": CUSTOM_HEADER_NAME,
+                        "HeaderValue": origin_header_value,
+                    },
+                ],
+            }
+        origin_items: List[Dict[str, Any]] = [alb_origin]
 
         cache_behaviors: Dict[str, Any] = {"Quantity": 0, "Items": []}
         oac_id: Optional[str] = None
@@ -1708,6 +1840,38 @@ class Installer:
         oac_id = resp["OriginAccessControl"]["Id"]
         logger.info("  CloudFront OAC 생성: %s", oac_id)
         return oac_id
+
+    def _ensure_cloudfront_origin_header(
+        self, dist_id: str, origin_header_value: str,
+    ) -> None:
+        """기존 CloudFront ALB Origin에 Custom Header 추가 (없을 경우)."""
+        try:
+            resp = self.cf.get_distribution_config(Id=dist_id)
+            cfg = resp["DistributionConfig"]
+            etag = resp["ETag"]
+            updated = False
+            for origin in cfg["Origins"].get("Items", []):
+                if "CustomOriginConfig" not in origin:
+                    continue
+                headers = origin.setdefault("CustomHeaders", {"Quantity": 0, "Items": []})
+                items = headers.get("Items", [])
+                has_header = any(
+                    h.get("HeaderName") == CUSTOM_HEADER_NAME for h in items
+                )
+                if not has_header:
+                    items.append({
+                        "HeaderName": CUSTOM_HEADER_NAME,
+                        "HeaderValue": origin_header_value,
+                    })
+                    headers["Quantity"] = len(items)
+                    headers["Items"] = items
+                    updated = True
+                    break
+            if updated:
+                self.cf.update_distribution(Id=dist_id, DistributionConfig=cfg, IfMatch=etag)
+                logger.info("  CloudFront ALB Origin에 Custom Header 추가: %s", CUSTOM_HEADER_NAME)
+        except ClientError as exc:
+            logger.warning("  CloudFront Origin Header 추가 경고: %s", exc)
 
     def _ensure_cloudfront_s3_origin(self, dist_id: str, s3_bucket_name: str) -> None:
         """기존 CloudFront 배포에 S3 Origin 및 /docs/* Cache Behavior 추가."""
