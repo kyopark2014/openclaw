@@ -407,6 +407,20 @@ python add_content.py
 <img width="497" height="643" alt="noname" src="https://github.com/user-attachments/assets/d8af6b90-4e57-449c-a791-a78345119b79" />
 
 
+## OpenClaw 수동 업그레이드
+
+```bash
+sudo npm install -g openclaw@latest
+sudo systemctl restart openclaw-gateway.service
+openclaw --version
+```
+
+실패시 재시도
+
+```bash
+openclaw doctor --fix
+sudo systemctl restart openclaw-gateway.service
+```
 
 ## Reference
 
