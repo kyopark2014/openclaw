@@ -422,6 +422,21 @@ openclaw doctor --fix
 sudo systemctl restart openclaw-gateway.service
 ```
 
+## Gateway Token 확인 방법
+
+SSM으로 접속해서 ec2-user로 전환후 아래 명령어로 확인합니다.
+
+```bash
+cat /home/ec2-user/openclaw-token.txt
+```
+
+또는 아래 방법도 가능합니다.
+
+
+```bash
+grep -A1 '"auth"' /home/ec2-user/.openclaw/openclaw.json
+```
+
 ## Reference
 
 [OpenClaw — Personal AI Assistant](https://github.com/openclaw/openclaw)
