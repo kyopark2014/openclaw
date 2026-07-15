@@ -1226,6 +1226,9 @@ class Installer:
             f'echo "{gateway_token}" > /home/ec2-user/openclaw-token.txt',
             "chown -R ec2-user:ec2-user /home/ec2-user/.openclaw /home/ec2-user/clawd /home/ec2-user/openclaw-token.txt",
             "",
+            'echo "=== Skill runtime deps (workspace-local npm, for require()) ==="',
+            "sudo -u ec2-user bash -lc 'cd /home/ec2-user/clawd && npm init -y >/dev/null 2>&1 && npm install docx@^9.0.0 pptxgenjs@^3.12.0 react@^18.3.1 react-dom@^18.3.1 react-icons@^5.4.0 sharp@^0.33.5 --save'",
+            "",
         ]
         if skills_s3_uri:
             lines.extend([
@@ -1779,7 +1782,8 @@ class Installer:
                     "Items": ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"],
                     "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
                 },
-                "Compress": True,
+                # WebSocket(Control UI) 핸드셰이크 응답이 압축되면 브라우저 연결이 끊길 수 있음
+                "Compress": False,
                 "ForwardedValues": {
                     "QueryString": True,
                     "Cookies": {"Forward": "all"},

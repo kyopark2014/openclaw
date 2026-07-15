@@ -24,6 +24,10 @@ timedatectl set-timezone Asia/Seoul || true
 npm install -g openclaw@latest
 
 mkdir -p /home/ec2-user/.openclaw /home/ec2-user/clawd
+chown -R ec2-user:ec2-user /home/ec2-user/clawd
+
+echo "=== Skill runtime deps (workspace-local npm, for require()) ==="
+sudo -u ec2-user bash -lc 'cd /home/ec2-user/clawd && npm init -y >/dev/null 2>&1 && npm install docx@^9.0.0 pptxgenjs@^3.12.0 react@^18.3.1 react-dom@^18.3.1 react-icons@^5.4.0 sharp@^0.33.5 --save'
 
 TOKEN=$(openssl rand -hex 32)
 echo "$TOKEN" > /home/ec2-user/openclaw-token.txt
